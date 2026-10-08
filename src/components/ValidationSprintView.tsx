@@ -4,9 +4,10 @@ import { Calendar, CheckCircle2, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface ValidationSprintViewProps {
   sprint: ValidationDay[];
+  sprintModeLabelAr?: string;
 }
 
-export const ValidationSprintView: React.FC<ValidationSprintViewProps> = ({ sprint }) => {
+export const ValidationSprintView: React.FC<ValidationSprintViewProps> = ({ sprint, sprintModeLabelAr }) => {
   const [activeDay, setActiveDay] = useState<number>(1);
 
   return (
@@ -17,12 +18,12 @@ export const ValidationSprintView: React.FC<ValidationSprintViewProps> = ({ spri
             خطة التحقق الميدانية (Action Plan)
           </span>
           <h3 className="font-heading font-bold text-lg text-[#FCFCFA] mt-0.5">
-            خطة تحقق مكثفة خلال 7 أيام
+            {sprintModeLabelAr ? `خطة التحقق: ${sprintModeLabelAr}` : 'خطة تحقق مكثفة خلال 7 أيام'}
           </h3>
         </div>
         <div className="text-xs text-[#C8C5BA] flex items-center gap-1.5">
           <Calendar className="w-4 h-4 text-[#F5BF1E]" />
-          <span>مخصصة لظروف وصولك للجمهور</span>
+          <span>مخصصة لمرحلة التحقق ونموذج المنتج</span>
         </div>
       </div>
 

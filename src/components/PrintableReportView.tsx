@@ -175,7 +175,7 @@ export const PrintableReportView: React.FC<PrintableReportViewProps> = ({ report
         {/* 5. 7-Day Sprint */}
         <section className="mb-8 space-y-3">
           <h2 className="font-heading font-bold text-lg text-[#040405] border-b border-[#E5E5E0] pb-2">
-            4. خطة التحقق خلال 7 أيام (Action Plan)
+            4. {report.sprintModeLabelAr ? `خطة التحقق: ${report.sprintModeLabelAr}` : 'خطة التحقق خلال 7 أيام (Action Plan)'}
           </h2>
           <div className="space-y-2.5 text-xs">
             {report.validationSprint.map((day) => (

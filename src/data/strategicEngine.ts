@@ -18,6 +18,7 @@ import {
   AiStrategicInterpretation,
   ValidationMaturityInfo,
   ValidationMaturityStage,
+  SprintMode,
 } from '../types';
 
 /**
@@ -34,83 +35,114 @@ export function inferValidationMaturityStage(answers: QuestionnaireAnswers): Val
   const demandList = (answers.demandEvidenceList || []) as string[];
   const quals = answers.qualificationEvidence || [];
   const hasClients = answers.hasExistingPayingClients === true;
-  const hasPreorders = demandList.includes('preorders_deposits');
-  const hasSoldRelated = demandList.includes('sold_related_work');
+
+  // Explicit payment evidence separation (Stage 4 money vs Stage 3 pre-commitment)
+  const hasActualPaidMoney =
+    demandList.includes('paid_pilot') ||
+    demandList.includes('paid_deposit') ||
+    demandList.includes('paid_preorder') ||
+    demandList.includes('preorders_deposits'); // legacy compatibility
+
+  const hasSoldRelatedWork = demandList.includes('sold_related_work');
+
+  const hasPurchaseCommitmentWithoutMoney = demandList.includes('purchase_commitment');
+
   const hasInbound =
     demandList.includes('people_ask_me') ||
     demandList.includes('existing_clients_ask') ||
     demandList.includes('inbound_requests');
+
   const hasWaitlist =
     demandList.includes('waitlist_subscribers') ||
     demandList.includes('free_waitlist');
+
   const hasCompetitors = demandList.includes('competitors_sell');
   const hasClientResults = quals.includes('client_results');
 
   const directDailyAudience = answers.audienceAccessLevel === 'direct_daily';
   const occasionalAudience = answers.audienceAccessLevel === 'occasional';
 
-  const workaround = (answers.currentAlternativesAndWorkarounds || '').trim();
-  const hasWorkaroundDescribed =
-    workaround.length > 5 && !workaround.includes('معنديش') && !workaround.includes('مش محدد');
+  // Objective behavioral workaround evidence (NOT character count)
+  const workaround = (answers.currentAlternativesAndWorkarounds || '').trim().toLowerCase();
+  const hasWorkaroundActions = [
+    'يدوي', 'يدويًا', 'إكسيل', 'شيت', 'واتساب', 'أداة', 'أدوات', 'ساعات', 'فريلانسر',
+    'بيشتري', 'كورسات', 'اشتراك', 'موظف', 'برنامج', 'تطبيق', 'يبحث', 'جرب'
+  ].some((act) => workaround.includes(act));
 
-  const repeatedQ = (answers.repeatedQuestions || '').trim();
-  const hasRepeatedQuestions =
-    repeatedQ.length > 5 && !repeatedQ.includes('معنديش') && !repeatedQ.includes('مش متأكد');
+  const repeatedQ = (answers.repeatedQuestions || '').trim().toLowerCase();
+  const hasRepeatedQuestionSignals = [
+    'سؤال', 'بيسأل', 'استفسار', 'ازاي', 'إزاي', 'طريقة', 'حل', 'مشكلة', 'ليه'
+  ].some((sig) => repeatedQ.includes(sig));
 
-  // STAGE 6: Scale Evidence
-  // Repeat buyers, documented client results, direct daily access, and proven delivery
-  if ((hasSoldRelated || hasClients) && hasClientResults && directDailyAudience && (hasPreorders || hasInbound)) {
+  // Explicit Scale Readiness criteria (Must be explicitly proven, never inferred from 3 pilots)
+  const isScaleYes = (val: any) => val === true || val === 'yes';
+  const hasExplicitScaleEvidence =
+    isScaleYes(answers.hasRepeatableAcquisitionChannel) &&
+    isScaleYes(answers.hasStableLeadFlow) &&
+    isScaleYes(answers.hasRepeatProductSales) &&
+    (isScaleYes(answers.hasMeasuredConversionRate) || isScaleYes(answers.hasDocumentedRetentionData));
+
+  // STAGE 6: Scale Evidence (Strictly requires explicit scale evidence)
+  if (hasExplicitScaleEvidence && (hasSoldRelatedWork || hasClients || hasActualPaidMoney) && hasClientResults) {
     return {
       stage: 'STAGE_6_SCALE_EVIDENCE',
       stageNumber: 6,
       labelAr: 'المرحلة 6: جاهزية التوسع (Scale Evidence)',
       labelEn: 'Scale Evidence',
       summaryAr:
-        'تمتلك نتائج متكررة مع عملاء سابقين ووصولاً مباشرًا يوميًا لجمهورك؛ الهدف هو أتمتة وتوسيع نطاق التسليم دون اختناق.',
+        'تمتلك أدلة توسع تشغيلية وقناة استقطاب وتدفق عملاء مستقر؛ التركيز على أتمتة النمو وإزالة اختناقات التسليم.',
     };
   }
 
-  // STAGE 5: Repeatable Delivery
-  // Has paying clients/sold related work + documented client results
-  if ((hasSoldRelated || hasClients) && hasClientResults) {
+  // STAGE 5: Repeatable Delivery (Explicit repeatable delivery evidence required)
+  // Requirement #4: Previous service clients or 3 paid pilots alone remain Stage 4 without explicit repeatability proof!
+  const isDeliveryYes = (val: any) => val === true || val === 'yes';
+  const hasDeliveredMultipleTimes = isDeliveryYes(answers.hasDeliveredSolutionMultipleTimes);
+  const understandsDeliveryBurden =
+    isDeliveryYes(answers.understandsStandardVsCustomDelivery) || isDeliveryYes(answers.knowsActualDeliveryBurden);
+  const hasRepeatableProcess =
+    isDeliveryYes(answers.hasRepeatableDeliveryProcess) || answers.uniqueMethodType === 'proprietary_framework';
+
+  const hasExplicitRepeatableDelivery =
+    hasDeliveredMultipleTimes && understandsDeliveryBurden && hasRepeatableProcess;
+
+  if (hasExplicitRepeatableDelivery && (hasActualPaidMoney || hasSoldRelatedWork || (hasClients && hasClientResults))) {
     return {
       stage: 'STAGE_5_REPEATABLE_DELIVERY',
       stageNumber: 5,
       labelAr: 'المرحلة 5: تسليم متكرر مثبت (Repeatable Delivery)',
       labelEn: 'Repeatable Delivery',
       summaryAr:
-        'تم تسليم النتيجة بنجاح لعملاء دفعوا بالفعل وحققوا مخرجات موثقة؛ الهدف هو تقنين التجربة في منتج رقمي مستقل أو عضوية.',
+        'تم تسليم النتيجة بنجاح لعملاء متعددين وفُهم العبء والخطوات المتكررة بدقة؛ الهدف تقنين التجربة في منتج رقمي مستقل.',
     };
   }
 
-  // STAGE 4: Paid Pilot
-  // Money has been exchanged: sold related work OR has current paying clients OR preorders received
-  if (hasSoldRelated || hasClients || hasPreorders) {
+  // STAGE 4: Paid Pilot (Actual money changed hands for pilot, deposit, preorder, or related work)
+  // IMPORTANT: 3 paid pilots + client results + audience access stays here at Stage 4 unless explicit repeatable delivery exists!
+  if (hasActualPaidMoney || hasSoldRelatedWork || hasClients) {
     return {
       stage: 'STAGE_4_PAID_PILOT',
       stageNumber: 4,
       labelAr: 'المرحلة 4: تجربة مدفوعة (Paid Pilot)',
       labelEn: 'Paid Pilot',
       summaryAr:
-        'يوجد سابقة دفع حقيقية أو عملاء حاليون لنفس المشكلة؛ التركيز الآن على حزم الحل بشكل مستقل عن وقتك الفردي.',
+        'يوجد سابقة دفع حقيقية أو عملاء حاليون لنفس المشكلة؛ التركيز على دراسة ما وراء الدفع وحزم الحل بشكل مستقل.',
     };
   }
 
-  // STAGE 3: Commitment Evidence
-  // Preorders/deposits or explicit commit to pay
-  if (hasPreorders) {
+  // STAGE 3: Commitment Evidence (Meaningful pre-purchase commitment WITHOUT money)
+  if (hasPurchaseCommitmentWithoutMoney) {
     return {
       stage: 'STAGE_3_COMMITMENT_EVIDENCE',
       stageNumber: 3,
       labelAr: 'المرحلة 3: التزام مسبق (Commitment Evidence)',
       labelEn: 'Commitment Evidence',
       summaryAr:
-        'تلقيت التزامات بحجز مسبق أو دفعات جزئية؛ حان وقت إطلاق النسخة الأولية لهؤلاء الملتزمين وتأكيد رضاهم.',
+        'تلقيت التزامات مؤكدة أو استمارات حجز مسبق دون دفع مالي بعد؛ حان وقت طلب التزام مالي حقيقي لإطلاق الدفعة.',
     };
   }
 
-  // STAGE 2: Interest Evidence
-  // Inbound requests ("ناس طلبت مني") or free waitlist / downloads
+  // STAGE 2: Interest Evidence (Qualified inbound requests or waitlists)
   if (hasInbound || hasWaitlist) {
     return {
       stage: 'STAGE_2_INTEREST_EVIDENCE',
@@ -118,13 +150,13 @@ export function inferValidationMaturityStage(answers: QuestionnaireAnswers): Val
       labelAr: 'المرحلة 2: مؤشرات اهتمام (Interest Evidence)',
       labelEn: 'Interest Evidence',
       summaryAr:
-        'يوجد اهتمام واستفسارات أو قائمة انتظار أولية، ولكن لم يتم دفع أي مبالغ مالية بعد؛ يلزم طلب التزام مالي حقيقي.',
+        'يوجد اهتمام واستفسارات أو قائمة انتظار، ولكن لم يتم دفع مبالغ مالية بعد؛ يلزم طلب التزام مالي أولي.',
     };
   }
 
-  // STAGE 1: Problem Evidence
-  // Customer conversations, documented workarounds, repeated questions, or active competitors
-  if (hasWorkaroundDescribed || hasRepeatedQuestions || hasCompetitors || (directDailyAudience || occasionalAudience)) {
+  // STAGE 1: Problem Evidence (Observed workarounds, repeated questions, competitors)
+  // Requirement #10: REMOVE audience access from problem evidence. Access is distribution advantage, NOT evidence that problem exists!
+  if (hasWorkaroundActions || hasRepeatedQuestionSignals || hasCompetitors) {
     return {
       stage: 'STAGE_1_PROBLEM_EVIDENCE',
       stageNumber: 1,
@@ -197,7 +229,10 @@ export function analyzeOpportunity(
   const productConcept = buildProductConcept(answers, formatRecommendation.primary);
   const positioning = buildPositioningStatement(answers);
   const mvp = buildMvpRecommendation(answers, formatRecommendation.primary, validationMaturity, aiInterpretation);
-  const validationSprint = buildValidationSprint(answers, validationMaturity);
+
+  // Requirement #7: Pass formatRecommendation into buildValidationSprint
+  const sprintResult = buildValidationSprint(answers, validationMaturity, formatRecommendation.primary);
+
   const discoveryQuestions = buildDiscoveryQuestions(answers);
   const stopGoRules = buildStopGoRules(answers, demandEvidence.score);
   const whatNotToDo = buildWhatNotToDo(
@@ -208,13 +243,30 @@ export function analyzeOpportunity(
     aiInterpretation
   );
   const missingData = buildMissingData(answers, demandEvidence.score, aiInterpretation);
-  const nextThreeQuestions = buildNextThreeQuestions(answers, validationMaturity, aiInterpretation);
+
+  // Requirement #9: Uncertainty-based next three questions
+  const nextThreeQuestions = buildNextThreeQuestions(
+    answers,
+    validationMaturity,
+    formatRecommendation.primary,
+    aiInterpretation
+  );
+
   const personalizedNextStep = buildPersonalizedNextStep(
     opportunityScore,
     confidenceScore,
     answers,
     validationMaturity
   );
+
+  // Requirement #14: Report Consistency Guard
+  // Guard 1: Ensure Membership never appears in Avoid if recommended
+  const isPrimaryMembership = formatRecommendation.primary.titleEn.toLowerCase().includes('membership');
+  const safeAvoid = formatRecommendation.avoid.filter((a) => {
+    if (isPrimaryMembership && a.titleEn.toLowerCase().includes('membership')) return false;
+    return true;
+  });
+  formatRecommendation.avoid = safeAvoid;
 
   return {
     id: `RPT-${Date.now().toString(36).toUpperCase()}`,
@@ -242,7 +294,9 @@ export function analyzeOpportunity(
     productConcept,
     positioning,
     mvp,
-    validationSprint,
+    sprintMode: sprintResult.sprintMode,
+    sprintModeLabelAr: sprintResult.sprintModeLabelAr,
+    validationSprint: sprintResult.days,
     discoveryQuestions,
     stopGoRules,
     whatNotToDo,
@@ -428,19 +482,22 @@ function calculateBuyerClarity(answers: QuestionnaireAnswers): DimensionScore {
     }
   }
 
-  // 4. Buyer current behavior (Evaluates whether active workarounds / current behavior are described)
+  // 4. Buyer current behavior (Evaluates whether observable actions / current behavior are described, NOT character count)
   const behavior = (answers.buyerCurrentBehavior || '').trim().toLowerCase();
   if (behavior) {
-    const hasActiveBehaviorKeywords = [
-      'يدوي', 'يدويًا', 'واتساب', 'إكسيل', 'شيت', 'ساعات', 'بيبحث', 'بيجرب', 'بيشتري', 
-      'كورسات', 'فريلانسر', 'يوظف', 'محادثات', 'تجربة', 'محاولات', 'يصرف', 'مجهود', 'أدوات'
-    ].some((w) => behavior.includes(w)) || behavior.length > 5;
+    // Observable actions: pays for something, uses a tool, hires someone, repeatedly searches, manual process
+    const hasObservableAction = [
+      'يدوي', 'يدويًا', 'واتساب', 'إكسيل', 'شيت', 'ساعات', 'بيبحث', 'يبحث', 'بيجرب', 'يجرب', 
+      'بيشتري', 'يشتري', 'دفع', 'يدفع', 'كورسات', 'فريلانسر', 'يوظف', 'يوظفون', 'محادثات', 
+      'محاولات', 'يصرف', 'مجهود', 'أداة', 'أدوات', 'برنامج', 'تطبيق', 'نظام', 'حملة', 'إعلانات'
+    ].some((w) => behavior.includes(w));
 
-    if (hasActiveBehaviorKeywords) {
+    if (hasObservableAction) {
       score += 17;
       notes.push('رصد السلوك الفعلي للعميل حاليًا يرفع مستوى الثقة في أنه يبذل جهدًا نشطًا للحل، ويحميك من استهداف جمهور متفرج لا يتحرك.');
     } else {
       score += 5;
+      notes.push('تمت الإشارة لسلوك العميل لكنه يحتاج لربطه بإجراء عملي ملحوظ (مثل استخدام أداة معينة أو الاستعانة بجهة خارجية).');
     }
   }
 
@@ -520,21 +577,32 @@ function calculateDemandEvidence(answers: QuestionnaireAnswers): DimensionScore 
 
   let score = 15;
 
-  // TIER 1: Actual Purchases / Deposits
-  if (list.includes('preorders_deposits')) {
+  // TIER 1: Actual Purchases / Deposits / Paid Pilots (Real money exchanged)
+  const hasPaidMoney =
+    list.includes('paid_pilot') ||
+    list.includes('paid_deposit') ||
+    list.includes('paid_preorder') ||
+    list.includes('preorders_deposits');
+
+  const hasPurchaseCommitment = list.includes('purchase_commitment');
+
+  if (hasPaidMoney) {
     score = 90;
-    notes.push('وجود حجوزات مسبقة أو دفعات مالية يعتبر الدليل الأقوى حاليًا على استعداد العميل للدفع الفعلي');
+    notes.push('وجود مدفوعات فعلية (حجوزات مسبقة أو دفعات أو تجربة مدفوعة) يعتبر الدليل الأقوى على استعداد العميل للدفع الفعلي');
   } else if (list.includes('sold_related_work')) {
     // TIER 2: Paid adjacent service
     score = 70;
     notes.push('وجود مبيعات سابقة لحل مرتبط يعتبر دليلًا أقوى على استعداد بعض العملاء للدفع مقابل مشكلة قريبة، لكنه لا يثبت الطلب على المنتج الرقمي بنفس الشكل.');
+  } else if (hasPurchaseCommitment) {
+    score = 68;
+    notes.push('وجود التزام شراء مسبق مؤكد يعكس نية شراء جدية، ولكنه يظل التزامًا بحاجة لدفع مالي لتأكيد الجاهزية التامة.');
   } else if (list.includes('existing_clients_ask')) {
     score = 65;
     notes.push('طلب العملاء الحاليين يعتبر مؤشرًا قويًا على وجود اهتمام حقيقي داخلي');
   } else if (list.includes('waitlist_subscribers')) {
     score = 60;
     notes.push('قائمة انتظار نشطة تعتبر دليلاً أوليًا ممتازًا على الاهتمام الحقيقي');
-  } else if (list.includes('people_ask_me')) {
+  } else if (list.includes('people_ask_me') || list.includes('inbound_requests')) {
     // TIER 3: Audience questions
     score = 40;
     notes.push('تكرار الأسئلة يعتبر مؤشر اهتمام أولي، لكنه لا يكفي وحده للحكم ولا يثبت نية الشراء الفعلي بعد.');
@@ -548,8 +616,8 @@ function calculateDemandEvidence(answers: QuestionnaireAnswers): DimensionScore 
   }
 
   // Correlated bump: only a modest secondary bump if multiple tiers exist
-  const hasTier1 = list.includes('preorders_deposits');
-  const hasTier2 = list.includes('sold_related_work') || list.includes('existing_clients_ask') || list.includes('waitlist_subscribers');
+  const hasTier1 = hasPaidMoney;
+  const hasTier2 = list.includes('sold_related_work') || list.includes('existing_clients_ask') || list.includes('waitlist_subscribers') || hasPurchaseCommitment;
   if (hasTier1 && hasTier2) {
     score = Math.min(100, score + 8);
   }
@@ -645,14 +713,33 @@ function calculateDeliveryFeasibility(answers: QuestionnaireAnswers): DimensionS
   let score = 35;
   const notes: string[] = [];
 
+  // Tri-State Evaluation: 'required' | 'not_required' | 'unknown'
+  const feedbackState =
+    answers.personalFeedbackState ||
+    (answers.requiresPersonalFeedback === true ? 'required' : answers.requiresPersonalFeedback === false ? 'not_required' : 'unknown');
+
+  const accountabilityState =
+    answers.oneOnOneAccountabilityState ||
+    (answers.requiresOneOnOneAccountability === true ? 'required' : answers.requiresOneOnOneAccountability === false ? 'not_required' : 'unknown');
+
   switch (answers.creatorTimePerCustomer) {
     case 'almost_none':
-      score += 45;
-      notes.push('قابلية توسع عالية مع استهلاك وقت شبه منعدم بعد البناء');
+      // UNKNOWN receives ZERO scalability bonus. Must remain neutral (0 bonus) when feedback or accountability is unknown.
+      if (feedbackState === 'unknown' || accountabilityState === 'unknown') {
+        // Zero excess bonus: remains at base score 35
+        notes.push('الرغبة في نموذج آلي متوسع غير مؤكدة بعد بسبب عدم تحديد الحاجة للملاحظات أو المتابعة الفردية (نموذج التسليم غير محقق بعد)');
+      } else {
+        score += 45;
+        notes.push('قابلية توسع عالية مع استهلاك وقت شبه منعدم بعد البناء');
+      }
       break;
     case 'under_30m':
-      score += 35;
-      notes.push('عبء تشغيلي منخفض يسمح بخدمة أعداد مريحة');
+      if (feedbackState === 'unknown' || accountabilityState === 'unknown') {
+        notes.push('عبء تشغيلي منخفض نسبيًا ولكن الحاجة للملاحظات الفردية غير محددة بعد');
+      } else {
+        score += 35;
+        notes.push('عبء تشغيلي منخفض يسمح بخدمة أعداد مريحة');
+      }
       break;
     case '1_to_2h':
       score += 20;
@@ -671,14 +758,14 @@ function calculateDeliveryFeasibility(answers: QuestionnaireAnswers): DimensionS
       break;
   }
 
-  // Requirement #1: Detect contradiction between scalability goal vs delivery dependency
-  // Creator wants a highly scalable model (almost_none or under_30m), BUT the transformation requires substantial feedback, personalization, or accountability
+  // Contradiction detection between scale desires vs intervention
   const wantsHighScale =
     answers.creatorTimePerCustomer === 'almost_none' || answers.creatorTimePerCustomer === 'under_30m';
   const deliveryList = answers.deliveryMechanism || [];
+
   const requiresSubstantialIntervention =
-    answers.requiresPersonalFeedback === true ||
-    answers.requiresOneOnOneAccountability === true ||
+    feedbackState === 'required' ||
+    accountabilityState === 'required' ||
     deliveryList.includes('critique_feedback') ||
     deliveryList.includes('accountability') ||
     deliveryList.includes('live_coaching');
@@ -688,9 +775,11 @@ function calculateDeliveryFeasibility(answers: QuestionnaireAnswers): DimensionS
     notes.unshift(
       'تناقض استراتيجي: ترغب في نموذج تسليم آلي عالي التوسع بدون استهلاك وقت، بينما التحول والآلية يتطلبان تقييمًا شخصيًا (Feedback) ومتابعة التزام (Accountability). هذا التناقض يضغط على وقتك أو يضعف رضا المشتركين.'
     );
-  } else if (answers.requiresPersonalFeedback === true && answers.requiresOneOnOneAccountability === true) {
+  } else if (feedbackState === 'required' && accountabilityState === 'required') {
     score -= 10;
     notes.push('الجمع بين التقييم الشخصي والمتابعة الفردية يقلل قابلية التوسع ما لم يتم تسعيره كبرنامج عالي القيمة');
+  } else if (feedbackState === 'unknown' && accountabilityState === 'unknown') {
+    notes.push('طبيعة التدخل البشري غير محددة بعد — يوصى بتحديد ما إذا كان التحول يتطلب تقييمًا فرديًا أم تعلمًا ذاتيًا.');
   }
 
   const finalScore = Math.min(100, Math.max(15, score));
@@ -1120,11 +1209,30 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
     answers.problemFrequency === 'occasional' || answers.problemFrequency === 'unsure';
   const isRecurringProblem =
     answers.problemFrequency === 'daily' || answers.problemFrequency === 'weekly' || answers.problemFrequency === 'monthly';
-  
-  const needsAccountability =
-    answers.requiresOneOnOneAccountability === true || (answers.deliveryMechanism || []).includes('accountability');
-  const needsPersonalFeedback =
-    answers.requiresPersonalFeedback === true || (answers.deliveryMechanism || []).includes('critique_feedback');
+
+  // Requirement #7: Tri-state logic for feedback and accountability in format scoring
+  // required: apply relevant positive/negative evidence
+  // not_required: allow low-touch evidence
+  // unknown: ZERO evidence either direction (never let unknown award low-touch/automated bonus)
+  const feedbackTriState =
+    answers.personalFeedbackState ||
+    (answers.requiresPersonalFeedback === true ? 'required' : answers.requiresPersonalFeedback === false ? 'not_required' : 'unknown');
+
+  const accountabilityTriState =
+    answers.oneOnOneAccountabilityState ||
+    (answers.requiresOneOnOneAccountability === true ? 'required' : answers.requiresOneOnOneAccountability === false ? 'not_required' : 'unknown');
+
+  const deliveryList = answers.deliveryMechanism || [];
+
+  const feedbackRequired =
+    feedbackTriState === 'required' || deliveryList.includes('critique_feedback');
+  const feedbackConfirmedNotRequired =
+    feedbackTriState === 'not_required' && !deliveryList.includes('critique_feedback');
+
+  const accountabilityRequired =
+    accountabilityTriState === 'required' || deliveryList.includes('accountability');
+  const accountabilityConfirmedNotRequired =
+    accountabilityTriState === 'not_required' && !deliveryList.includes('accountability');
 
   const isZeroTouch =
     answers.creatorTimePerCustomer === 'almost_none' || answers.creatorTimePerCustomer === 'under_30m';
@@ -1134,29 +1242,48 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
 
   const hasExistingAudience =
     answers.audienceAccessLevel === 'direct_daily' || answers.audienceAccessLevel === 'occasional';
-  const hasProvenDemand =
-    (answers.demandEvidenceList || []).includes('preorders_deposits') ||
-    (answers.demandEvidenceList || []).includes('sold_related_work');
-  const hasRecurringPurchasingProof =
-    (answers.demandEvidenceList || []).includes('sold_related_work') &&
-    (answers.qualificationEvidence || []).includes('client_results');
 
   const demandListForFormat = (answers.demandEvidenceList || []) as string[];
-  const textSignals = `${answers.repeatedQuestions || ''} ${answers.problemsFrequentlySolved || ''} ${answers.currentAlternativesAndWorkarounds || ''}`.toLowerCase();
+
+  // Strict separation between hasPaymentEvidence and hasRecurringPaymentEvidence
+  const hasPaymentEvidence =
+    demandListForFormat.includes('paid_pilot') ||
+    demandListForFormat.includes('paid_deposit') ||
+    demandListForFormat.includes('paid_preorder') ||
+    demandListForFormat.includes('preorders_deposits') ||
+    demandListForFormat.includes('sold_related_work') ||
+    answers.hasExistingPayingClients === true;
+
+  const hasProvenDemand = hasPaymentEvidence;
+
+  // Explicit Recurring Payment Evidence (Selling consulting repeatedly is NOT subscription demand!)
+  const hasExplicitMonthlyBehavior =
+    answers.hasRecurringPaymentBehavior === 'recurring_monthly';
+  const hasRepeatBuyersBehavior =
+    answers.hasRecurringPaymentBehavior === 'repeat_buyers_no_sub';
+
+  const hasRecurringPaymentEvidence =
+    hasExplicitMonthlyBehavior ||
+    (hasRepeatBuyersBehavior && (Number(answers.recurringBuyerCountApprox) > 3 || answers.hasExistingPayingClients === true));
+
+  // Requirement #2: DO NOT INFER EXPLICIT RECURRING REQUESTS FROM GENERIC TEXT
+  // explicitRecurringRequestReceived must be primary source of truth!
   const hasExplicitRecurringRequest =
-    demandListForFormat.includes('inbound_requests') ||
-    demandListForFormat.includes('people_ask_me') ||
-    demandListForFormat.includes('existing_clients_ask') ||
-    textSignals.includes('اشتراك') ||
-    textSignals.includes('شهري') ||
-    textSignals.includes('جروب') ||
-    textSignals.includes('مجموعة') ||
-    textSignals.includes('مجتمع') ||
-    textSignals.includes('متابعة دورية') ||
-    textSignals.includes('recurring') ||
-    textSignals.includes('membership') ||
-    textSignals.includes('community') ||
-    (answers.hasExistingPayingClients === true && hasRecurringPurchasingProof);
+    answers.explicitRecurringRequestReceived === true ||
+    answers.explicitRecurringRequestReceived === 'yes';
+
+  // Requirement #3: DO NOT TREAT RECURRING PROBLEM ALONE AS A VALID RENEWAL REASON
+  // Require explicit continuation mechanism: ongoing practice, new cases, accountability, recurring feedback, updates, community
+  const recurringReasonText = (answers.recurringValueReason || '').trim().toLowerCase();
+  const continuationSignals = [
+    'تحديث', 'تحديثات', 'ممارسة', 'متابعة', 'مراجعة', 'فرص', 'تطوير', 'تطبيق', 'حالات جديدة',
+    'مساءلة', 'جروب', 'مجتمع', 'شبكة', 'أسئلة', 'شهر', 'دوري', 'تغذية راجعة', 'feedback', 'accountability'
+  ];
+  const hasCredibleContinuationMechanism =
+    recurringReasonText.length > 8 && continuationSignals.some((sig) => recurringReasonText.includes(sig));
+
+  // If recurringValueReason is empty/unknown, Membership loses confidence even if problem repeats
+  const hasValidRecurringReason = hasCredibleContinuationMechanism;
 
   const canSustainRecurringDelivery =
     isRecurringSupport ||
@@ -1165,7 +1292,6 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
     answers.availableWeeklyHours === '10_to_20' ||
     answers.availableWeeklyHours === 'full_time';
 
-  const deliveryList = answers.deliveryMechanism || [];
   const hasTemplates = deliveryList.includes('templates_tools');
   const hasFramework =
     deliveryList.includes('framework_steps') || answers.uniqueMethodType === 'proprietary_framework';
@@ -1193,8 +1319,8 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
         (hasTemplates ? 40 : 0) +
         (isZeroTouch ? 25 : 0) +
         (isTripwire ? 25 : 0) +
-        (!needsPersonalFeedback ? 15 : -35) +
-        (!needsAccountability ? 10 : -25) +
+        (feedbackConfirmedNotRequired ? 15 : feedbackRequired ? -35 : 0) +
+        (accountabilityConfirmedNotRequired ? 10 : accountabilityRequired ? -25 : 0) +
         (isOneTimeProblem ? 15 : 0),
       info: {
         titleAr: 'حزمة قوالب وأدوات تنفيذية (Actionable Toolkit & Templates)',
@@ -1214,7 +1340,7 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
         (hasFramework ? 40 : 0) +
         (isZeroTouch ? 25 : 0) +
         (isOneTimeProblem ? 20 : 0) +
-        (!needsPersonalFeedback ? 15 : -25) +
+        (feedbackConfirmedNotRequired ? 15 : feedbackRequired ? -25 : 0) +
         (!hasTemplates ? 10 : 0) +
         (answers.uniqueMethodType === 'proprietary_framework' ? 20 : 0),
       info: {
@@ -1234,7 +1360,7 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
         35 +
         (isZeroTouch ? 20 : 0) +
         (isTripwire || answers.expectedPriceTier === 'low_50_150' ? 30 : 0) +
-        (!needsPersonalFeedback ? 15 : -20) +
+        (feedbackConfirmedNotRequired ? 15 : feedbackRequired ? -20 : 0) +
         (isOneTimeProblem ? 15 : 0),
       info: {
         titleAr: 'دورة مصغرة عالية التركيز (60–90 دقيقة - Mini Course)',
@@ -1246,7 +1372,7 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
       },
     },
 
-    // 4. Full Course (Penalty applied when problem is recurring, support is recurring, or community/accountability is required)
+    // 4. Full Course
     {
       id: 'full_course',
       score:
@@ -1259,7 +1385,7 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
         (isRecurringProblem ? 35 : 0) -
         (isRecurringSupport ? 35 : 0) -
         (hasCommunity ? 25 : 0) -
-        (needsAccountability ? 25 : 0),
+        (accountabilityRequired ? 25 : 0),
       info: {
         titleAr: 'برنامج تدريبي شامل مسجل (Comprehensive Flagship Course)',
         titleEn: 'Full Course',
@@ -1295,7 +1421,7 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
       id: 'cohort_sprint',
       score:
         25 +
-        (needsAccountability ? 45 : -20) +
+        (accountabilityRequired ? 45 : -20) +
         (hasLiveCalls ? 25 : 0) +
         (isHighTouch ? 25 : -35) +
         (isPremiumTier || answers.expectedPriceTier === 'mid_150_500' ? 25 : 0) +
@@ -1310,19 +1436,20 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
       },
     },
 
-    // 7. Membership (Requires recurring problem, ongoing value & proven retention)
+    // 7. Membership (Strict: Requires recurring problem, ongoing continuation value & proven recurring payment behavior)
     {
       id: 'membership',
       score:
         10 +
-        (isRecurringProblem ? 40 : -50) +
+        (isRecurringProblem ? 40 : -60) +
         (isRecurringSupport ? 35 : -40) +
-        (hasRecurringPurchasingProof ? 35 : -35) +
+        (hasRecurringPaymentEvidence ? 45 : -35) +
         (hasExistingAudience ? 25 : -30) +
         (hasCommunity ? 25 : 0) +
         (hasLiveCalls ? 20 : 0) +
-        (needsAccountability ? 20 : 0) +
-        (hasExplicitRecurringRequest ? 30 : 0) +
+        (accountabilityRequired ? 20 : 0) +
+        (hasExplicitRecurringRequest ? 30 : -20) +
+        (hasValidRecurringReason ? 30 : -50) + // Strong penalty if credible continuation value reason is absent or unverified
         (canSustainRecurringDelivery ? 20 : -20),
       info: {
         titleAr: 'عضوية شهرية / اشتراك دوري (Recurring Membership)',
@@ -1361,7 +1488,7 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
         25 +
         (isTripwire || isBackendFeeder ? 35 : 0) +
         (isZeroTouch ? 30 : 0) +
-        (!needsPersonalFeedback && !needsAccountability ? 25 : -20),
+        (feedbackConfirmedNotRequired && accountabilityConfirmedNotRequired ? 25 : (feedbackRequired || accountabilityRequired ? -25 : 0)),
       info: {
         titleAr: 'أداة تقييم وتشخيص متخصصة (Diagnostic Assessment & Audit)',
         titleEn: 'Assessment',
@@ -1377,7 +1504,7 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
       id: 'productized_consulting',
       score:
         20 +
-        (needsPersonalFeedback ? 40 : -20) +
+        (feedbackRequired ? 40 : feedbackConfirmedNotRequired ? -20 : 0) +
         (isHighTouch ? 35 : -45) +
         (isPremiumTier ? 35 : 0) +
         (isBackendFeeder ? 30 : 0) +
@@ -1397,7 +1524,7 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
       id: 'hybrid_product',
       score:
         30 +
-        ((hasTemplates || hasFramework) && (needsPersonalFeedback || hasLiveCalls) ? 45 : 0) +
+        ((hasTemplates || hasFramework) && (feedbackRequired || hasLiveCalls) ? 45 : 0) +
         (answers.creatorTimePerCustomer === 'under_30m' || answers.creatorTimePerCustomer === '1_to_2h' ? 30 : 0) +
         (answers.expectedPriceTier === 'mid_150_500' || isPremiumTier ? 25 : 0),
       info: {
@@ -1417,20 +1544,20 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
       return b.score - a.score;
     }
     // When problem/value is recurring and recurring evidence exists, Membership / Community has contextual priority over one-time courses
-    if (isRecurringProblem && (hasRecurringPurchasingProof || isRecurringSupport || hasCommunity)) {
+    if (isRecurringProblem && (hasRecurringPaymentEvidence || isRecurringSupport || hasCommunity)) {
       if (a.id === 'membership') return -1;
       if (b.id === 'membership') return 1;
       if (a.id === 'paid_community') return -1;
       if (b.id === 'paid_community') return 1;
     }
-    // Zero-touch with no feedback favors templates or playbooks
-    if (isZeroTouch && !needsPersonalFeedback) {
+    // Zero-touch with confirmed no feedback favors templates or playbooks
+    if (isZeroTouch && feedbackConfirmedNotRequired) {
       if (a.id === 'toolkit') return -1;
       if (b.id === 'toolkit') return 1;
       if (a.id === 'playbook') return -1;
       if (b.id === 'playbook') return 1;
     }
-    return a.id.localeCompare(b.id);
+    return 0;
   });
 
   const primary = options[0].info;
@@ -1452,7 +1579,7 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
   // Membership only discouraged when THIS case lacks the essential conditions:
   const lacksRecurringNeed = isOneTimeProblem;
   const lacksAudienceAccess = answers.audienceAccessLevel === 'none_yet' || answers.audienceAccessLevel === 'unsure';
-  const lacksRecurringEvidence = !hasRecurringPurchasingProof && answers.hasExistingPayingClients !== true;
+  const lacksRecurringEvidence = !hasRecurringPaymentEvidence && !hasExplicitRecurringRequest;
   const lacksDeliveryCapacity = answers.creatorTimePerCustomer === 'high_touch' && answers.availableWeeklyHours === 'under_5';
 
   if (lacksRecurringNeed || (lacksAudienceAccess && lacksRecurringEvidence) || lacksDeliveryCapacity) {
@@ -1739,177 +1866,449 @@ function buildMvpRecommendation(
 
 function buildValidationSprint(
   answers: QuestionnaireAnswers,
-  validationMaturity?: ValidationMaturityInfo
-): ValidationDay[] {
+  validationMaturity?: ValidationMaturityInfo,
+  formatRecommendation?: ProductFormatInfo
+): { sprintMode: SprintMode; sprintModeLabelAr: string; days: ValidationDay[] } {
   const stageNum = validationMaturity?.stageNumber ?? 0;
+  const primaryEn = (formatRecommendation?.titleEn || '').toLowerCase();
+  const isMembershipOrCommunity = primaryEn.includes('membership') || primaryEn.includes('community');
 
-  // Case A: High Validation Maturity (Stage 4, 5, 6 - Has Paying Clients or Repeat Delivery)
-  if (stageNum >= 4) {
-    return [
-      {
-        dayNumber: 1,
-        dayTitleAr: 'اليوم الأول: تدقيق نتائج وتجارب العملاء السابقين',
-        focusAr: 'استخلاص الأنماط المشتركة والنتيجة الأكثر قيمة التي دفع العملاء مقابلها',
-        actionItems: [
-          'راجع سجلات آخر 5 إلى 10 عملاء دفعوا لك واستخرج النتيجة التي حققوها بنجاح.',
-          'حدد الخطوات الـ 3 إلى 5 التي تكررت في تسليم الخدمة لكل عميل.',
-          'حدد الجزء الذي يستهلك أكبر قدر من وقتك ويمكن تحويله لأصل أو قالب رقمي.',
-        ],
-        expectedOutputAr: 'خريطة تفريغ لمراحل الحل مع تحديد المخرجات القابلة للأتمتة.',
-      },
-      {
-        dayNumber: 2,
-        dayTitleAr: 'اليوم الثاني: إعداد أسئلة حزم العرض المتكرر',
-        focusAr: 'تصميم استطلاع مخصص للعملاء الحاليين لفهم ما يدفعهم للاستمرار',
-        actionItems: [
-          'جهّز 4 أسئلة موجهة لعملائك: "إيه أكتر جزء ساعدك؟" و "إيه اللي تتمنى يفضل متاح معاك شهريًا؟".',
-          'حدد سقف التسعير المقترح للعضوية أو المنتج الرقمي مقارنة بالخدمة الفردية.',
-          'اختر 3 إلى 5 عملاء حاليين أو سابقين ذوي علاقة وطيدة لإجراء مكالمات سريعة.',
-        ],
-        expectedOutputAr: 'قائمة أسئلة صقل العرض جاهزة للتواصل المباشر.',
-      },
-      {
-        dayNumber: 3,
-        dayTitleAr: 'اليوم الثالث: محادثات التطوير مع 3 عملاء حاليين',
-        focusAr: 'التحقق من جاذبية النموذج الرقمي المقترح مع من دفعوا لك بالفعل',
-        actionItems: [
-          'تواصل شخصيًا مع عميلين أو ثلاثة في مكالمة سريعة مدتها 15 دقيقة.',
-          'اعرض عليهم فكرة العرض الرقمي أو العضوية الشهرية واسألهم عن رأيهم الصريح.',
-          'دوّن الكلمات الدقيقة وملاحظاتهم حول ما يجعلهم ينضمون فورًا.',
-        ],
-        expectedOutputAr: 'تأكيد مباشر من مشترين حقيقيين حول ملاءمة هيكل العرض والتسعير.',
-      },
-      {
-        dayNumber: 4,
-        dayTitleAr: 'اليوم الرابع: تثبيت نطاق العرض الأولي (Scope Lock)',
-        focusAr: 'تحديد ما يتضمنه العرض وما يستثنى منه تمامًا لحماية وقتك',
-        actionItems: [
-          'ضع حدودًا صارمة: كم جلسة جماعية شهريًا؟ ما نوع القوالب المتضمنة؟',
-          'استبعد أي التزام بالرد الفردي على مدار الساعة دون سقف زمني.',
-          'حدد آلية الاستبقاء للشهر الثاني والثالث (Recurring Habit Loop).',
-        ],
-        expectedOutputAr: 'وثيقة نطاق عمل محددة للعرض التجريبي تحمي طاقتك التشغيلية.',
-      },
-      {
-        dayNumber: 5,
-        dayTitleAr: 'اليوم الخامس: صياغة عرض الأعضاء المؤسسين (Founding Offer)',
-        focusAr: 'صياغة دعوة خاصة بمزايا تفضيلية مدى الحياة للأوائل',
-        actionItems: [
-          'صغ رسالة دعوة حصرية للأعضاء المؤسسين (سعر مخفض دائم مقابل المشاركة الفعالة).',
-          'حدد سقفًا واضحًا للمقاعد (مثلاً 5 إلى 10 مقاعد فقط).',
-          'جهّز رابط الدفع أو استمارة التأكيد المباشرة.',
-        ],
-        expectedOutputAr: 'رسالة عرض مؤسس جذابة جاهزة للإرسال المباشر.',
-      },
-      {
-        dayNumber: 6,
-        dayTitleAr: 'اليوم السادس: طرح العرض الخاص على عملائك وقائمتك',
-        focusAr: 'إرسال العرض في رسائل خاصة للمؤهلين بدلاً من النشر العام العشوائي',
-        actionItems: [
-          'أرسل رسالة الدعوة الفردية لـ 10 إلى 20 شخصًا من عملائك والمستفسرين السابقين.',
-          'أجب عن استفساراتهم باهتمام وشخصنة ورصد أي تردد.',
-          'قم بتأكيد أول المشتركين وإضافتهم للمجموعة التجريبية.',
-        ],
-        expectedOutputAr: 'تسجيل الاشتراكات الفعلية وتأكيد حجز مقاعد الدفعة الأولى.',
-      },
-      {
-        dayNumber: 7,
-        dayTitleAr: 'اليوم السابع: مراجعة التحويل وقفل مقاعد الدفعة الأولى',
-        focusAr: 'تقييم نسبة القبول والانطلاق في تسليم الشهر الأول',
-        actionItems: [
-          'إذا حجز 3 إلى 5 أعضاء مؤسسين: أغلق الدفعة الأولى وابدأ جدول التسليم فورًا.',
-          'إذا كان هناك تردد في الاستمرار: عدل المكونات بناءً على ملاحظاتهم.',
-          'وثق أول جلسة أو قالب في جدول الإطلاق الأسبوعي.',
-        ],
-        expectedOutputAr: 'انطلاق الدفعة التجريبية الأولى والتفرغ لتقديم تجربة استثنائية.',
-      },
-    ];
+  // Mode 1: SCALE_READINESS_SPRINT (Stage 6 ONLY when explicit scale evidence exists)
+  if (stageNum === 6) {
+    return {
+      sprintMode: 'SCALE_READINESS_SPRINT',
+      sprintModeLabelAr: 'معسكر جاهزية التوسع (Scale Readiness Sprint)',
+      days: [
+        {
+          dayNumber: 1,
+          dayTitleAr: 'اليوم الأول: خريطة تدفق العملاء واختناقات التسليم',
+          focusAr: 'تحديد النقطة التي سيتعطل عندها النظام لو تضاعف عدد المشتركين غدًا',
+          actionItems: [
+            'ارسم مسار العميل من لحظة الاكتشاف حتى اكتمال النتيجة.',
+            'حدد الخطوة الوحيدة التي تعتمد على حضورك الذهني الفردي.',
+            'احسب السقف العددي الأقصى للعملاء الحاليين قبل تدهور الجودة.',
+          ],
+          expectedOutputAr: 'وثيقة تحديد عنق الزجاجة التشغيلي (Operational Bottleneck).',
+        },
+        {
+          dayNumber: 2,
+          dayTitleAr: 'اليوم الثاني: توثيق إجراءات التشغيل القياسية (SOPs)',
+          focusAr: 'تحويل المهام اليدوية المتكررة إلى خطوات يمكن تفويضها أو أتمتتها',
+          actionItems: [
+            'سجل فيديو شاشة مدته 10 دقائق لخطوة متكررة تقوم بها لكل عميل.',
+            'اكتب قائمة تدقيق (Checklist) من 5 خطوات يمكن لمساعد تنفيذها.',
+            'حدد برمجيات الربط (Zapier / Webhooks) الممكنة للتسليم التلقائي.',
+          ],
+          expectedOutputAr: 'أول 3 أدلة تشغيل معيارية (SOPs) للتسليم دون تدخلك.',
+        },
+        {
+          dayNumber: 3,
+          dayTitleAr: 'اليوم الثالث: تدقيق كفاءة قناة الاستقطاب (Acquisition Audit)',
+          focusAr: 'فحص تكلفة استقطاب العميل وتوقع ثبات التدفق على مدار 90 يومًا',
+          actionItems: [
+            'راجع مصدر آخر 20 عميلاً دفعوا لك وتأكد من القناة الأكثر ربحية.',
+            'احسب نسبة التحويل من مرحلة الاهتمام إلى الدفع الفعلي.',
+            'حدد ما إذا كانت القناة تعتمد على النشر اليدوي أم أنها قابلة للأتمتة.',
+          ],
+          expectedOutputAr: 'تقرير كفاءة قناة الاستقطاب وجاهزيتها لضخ ميزانية إضافية.',
+        },
+        {
+          dayNumber: 4,
+          dayTitleAr: 'اليوم الرابع: اختبار سعة التسليم المجمعة (Batch Testing)',
+          focusAr: 'تقديم الخدمة لمجموعة متزامنة بنفس المجهود الفردي المعتاد',
+          actionItems: [
+            'اجمع استفسارات ومراجعات العملاء في جلسة جماعية واحدة أسبوعيًا بدلاً من الردود المتفرقة.',
+            'أنشئ نموذج استقبال موحد لطلبات الملاحظات يمنع الفوضى.',
+            'قس الوقت المستغرق بعد تجميع المهام.',
+          ],
+          expectedOutputAr: 'توفير 40% من ساعات التسليم الأسبوعية عبر التجميع المنظم.',
+        },
+        {
+          dayNumber: 5,
+          dayTitleAr: 'اليوم الخامس: تثبيت هيكل الدعم وخدمة العملاء',
+          focusAr: 'إبعاد صاحب الخبرة عن الرد على الأسئلة الإدارية والتقنية',
+          actionItems: [
+            'اكتب ملف إجابات للأسئلة الإدارية والتقنية الأكثر تكرارًا (10 أسئلة).',
+            'حدد آلية توجيه المشتركين للمجتمع والزملاء لمساعدة بعضهم.',
+            'أغلق رسائل التواصل المباشرة المشتتة واعتمد قناة دعم واحدة.',
+          ],
+          expectedOutputAr: 'بوابة دعم ذاتية متكاملة للمشتركين.',
+        },
+        {
+          dayNumber: 6,
+          dayTitleAr: 'اليوم السادس: اختبار زيادة السعة بنسبة 50%',
+          focusAr: 'فتح مقاعد إضافية مشروطة لقياس استقرار النظام تحت الضغط',
+          actionItems: [
+            'اطرح دفعة جديدة بسعة أكبر بنسبة 50% عبر القناة المثبتة.',
+            'راقب وقت الاستجابة ومستوى رضا المشتركين الجدد.',
+            'رصد أي خلل في بوابات الدفع أو رسائل الترحيب التلقائية.',
+          ],
+          expectedOutputAr: 'بيانات ضغط واقعية تثبت متانة البنية التحتية.',
+        },
+        {
+          dayNumber: 7,
+          dayTitleAr: 'اليوم السابع: اعتماد نموذج التوسع المالي والتشغيلي',
+          focusAr: 'اتخاذ قرار الاستثمار في الإعلانات أو فريق الدعم بناءً على الأرقام',
+          actionItems: [
+            'قارن هوامش الربح بعد خصم تكاليف الأدوات والمساعدين.',
+            'ثبت وتيرة إطلاق الحملات الشهرية أو الربع سنوية.',
+            'ضع خطة التوسع لـ 6 أشهر القادمة.',
+          ],
+          expectedOutputAr: 'خطة تشغيلية متكاملة لنمو المنتج دون التضحية بالوقت الشخصي.',
+        },
+      ],
+    };
   }
 
-  // Case B: Moderate Validation Maturity (Stage 2, 3 - Interest or Commitment Signals)
+  // Mode 2: RECURRING_MODEL_VALIDATION_SPRINT (Recurring Membership / Community with real recurring evidence)
+  if (isMembershipOrCommunity && (stageNum >= 4 || answers.hasRecurringPaymentBehavior === 'recurring_monthly')) {
+    return {
+      sprintMode: 'RECURRING_MODEL_VALIDATION_SPRINT',
+      sprintModeLabelAr: 'معسكر تحقق نموذج الاشتراكات والاستبقاء (Recurring Model Validation)',
+      days: [
+        {
+          dayNumber: 1,
+          dayTitleAr: 'اليوم الأول: فحص روتين الاستبقاء (Why Stay in Month 2 & 3?)',
+          focusAr: 'تحديد السبب الحاسم الذي يجعل المشترك يجدد اشتراكه ولا يلغيه بعد 30 يومًا',
+          actionItems: [
+            'اكتب إجابة واضحة: إيه القيمة المتجددة شهريًا التي لا يمكن تحميلها في ملف واحد والرحيل؟',
+            'حدد العادة الأسبوعية التي يمارسها العضو داخل العضوية (مراجعة، جلسة، تحديث سوقي).',
+            'استبعد أي التزام بإنتاج محتوى مكثف يسبب لك الإرهاق.',
+          ],
+          expectedOutputAr: 'وثيقة محرك الاستبقاء (Retention Engine Definition).',
+        },
+        {
+          dayNumber: 2,
+          dayTitleAr: 'اليوم الثاني: استطلاع العملاء الحاليين حول احتياج المتابعة',
+          focusAr: 'سؤال المشترين الذين دفعوا بالفعل عن الجزء الذي يحتاجون لاستمراره',
+          actionItems: [
+            'تواصل مع 3 إلى 5 عملاء دفعوا لك سابقًا في محادثة مباشرة سريعة.',
+            'اسألهم: "إيه الجزء اللي تحب يفضل مستمر معاك شهريًا لحل المشاكل أولاً بأول؟".',
+            'اختبر نقطة السعر الشهري المتوقعة مقابل القيمة.',
+          ],
+          expectedOutputAr: 'تغذية راجعة صريحة حول شكل العضوية وجاذبية الاشتراك الدوري.',
+        },
+        {
+          dayNumber: 3,
+          dayTitleAr: 'اليوم الثالث: تثبيت سقف الالتزام التشغيلي (Timebox Protection)',
+          focusAr: 'حماية وقتك من استنزاف طلبات الأعضاء وتحديد مواعيد الدعم',
+          actionItems: [
+            'حدد جدولاً ثابتًا: مثلاً جلستان مباشرتان شهريًا وتحديث واحد للقوالب.',
+            'ضع ميثاقًا يوضح أن الملاحظات تقدم داخل الجلسات الجماعية وليس عبر الرسائل الخاصة.',
+            'احسب عدد الساعات الإجمالية المطلوبة شهريًا (يجب ألا تتجاوز 5–8 ساعات).',
+          ],
+          expectedOutputAr: 'ميثاق حدود التسليم للعضوية لحماية طاقتك.',
+        },
+        {
+          dayNumber: 4,
+          dayTitleAr: 'اليوم الرابع: صياغة عرض الأعضاء المؤسسين (Founding Cohort Offer)',
+          focusAr: 'صياغة دعوة خاصة لأول 10 إلى 20 عضوًا بسعر تفضيلي دائم',
+          actionItems: [
+            'صغ رسالة حصرية: سعر مؤسس مخفض مدى الحياة مقابل المساهمة في بناء المجتمع.',
+            'حدد سقفًا صارمًا للمقاعد (10 أعضاء فقط).',
+            'جهّز صفحة دفع اشتراك شهري متكرر أو رابط سداد أولي.',
+          ],
+          expectedOutputAr: 'عرض دعوة الأعضاء المؤسسين جاهز للإرسال.',
+        },
+        {
+          dayNumber: 5,
+          dayTitleAr: 'اليوم الخامس: إرسال الدعوات المباشرة للمؤهلين',
+          focusAr: 'مخاطبة العملاء المهتمين فرادى بدلاً من الإعلان العام المفتوح',
+          actionItems: [
+            'أرسل رسالة الدعوة لـ 15 شخصًا من عملائك أو من طلبوا متابعة مستمرة.',
+            'أجب عن استفساراتهم ووضح ما يشتمل عليه الشهر الأول بالتحديد.',
+            'سجل المشتركين الأوائل في قائمة الأعضاء المؤسسين.',
+          ],
+          expectedOutputAr: 'تأكيد انضمام أول 3 إلى 5 أعضاء مؤسسين بالدفع الفعلي.',
+        },
+        {
+          dayNumber: 6,
+          dayTitleAr: 'اليوم السادس: إعداد تجربة الانضمام للأسبوع الأول (Onboarding)',
+          focusAr: 'ضمان شعور العضو بقيمة فورية في أول 48 ساعة لمنع الإلغاء المبكر',
+          actionItems: [
+            'جهّز رسالة ترحيبية فورية مع دليل استخدام العضوية في صفحة واحدة.',
+            'وفّر أول أصل تطبيقي جاهز للاستخدام الفوري لسرعة الشعور بالإنجاز.',
+            'أعلن موعد اللقاء التعريفي الأول أو الجلسة التشخيصية.',
+          ],
+          expectedOutputAr: 'مسار انضمام ترحيبي يرفع التفاعل ويثبت القيمة من اليوم الأول.',
+        },
+        {
+          dayNumber: 7,
+          dayTitleAr: 'اليوم السابع: إغلاق المقاعد وانطلاق الشهر الأول',
+          focusAr: 'تقييم معدل التحويل وبدء جدول التسليم الشهري المنظم',
+          actionItems: [
+            'أغلق باب الانضمام التجريبي عند اكتمال المقاعد.',
+            'وثق روتين الشهر الأول في تقويم ثابت مع المشتركين.',
+            'ضع معيار قياس لنسبة الاستمرار والتجديد للشهر الثاني.',
+          ],
+          expectedOutputAr: 'انطلاق العضوية رسميًا وبدء دورة الاستبقاء الأولى.',
+        },
+      ],
+    };
+  }
+
+  // Mode 3: DELIVERY_VALIDATION_SPRINT (Stage 5 - Repeatable Delivery proven, standardizing assets)
+  if (stageNum === 5) {
+    return {
+      sprintMode: 'DELIVERY_VALIDATION_SPRINT',
+      sprintModeLabelAr: 'معسكر تقنين وتوحيد التسليم (Delivery Standardization Sprint)',
+      days: [
+        {
+          dayNumber: 1,
+          dayTitleAr: 'اليوم الأول: تدقيق الخطوات المتكررة بين العملاء السابقين',
+          focusAr: 'فرز ما يتكرر دائمًا عن ما يحتاج لتخصيص فردي',
+          actionItems: [
+            'راجع آخر 5 عملاء دفعوا لك واكتب الخطوات الـ 4 التي مر بها الجميع.',
+            'حدد الأجزاء التي تشرحها بنفس الكلمات لكل عميل.',
+            'حدد الجزء الفريد الذي لا يمكن حله إلا بتدخلك المباشر.',
+          ],
+          expectedOutputAr: 'مصفوفة التكرار: (80% قياسي موحد مقابل 20% مخصص).',
+        },
+        {
+          dayNumber: 2,
+          dayTitleAr: 'اليوم الثاني: تحويل الشرح المتكرر إلى أصل رقمي مسجل',
+          focusAr: 'إنتاج أول أصل رقمي يستبدل جلسة تمهيدية كاملة',
+          actionItems: [
+            'سجل فيديو واحدًا مدته 20 دقيقة يشرح الإطار النظري الأساسي.',
+            'صمم القالب أو ورقة العمل التي يعبئها العميل قبل مقابلتك.',
+            'تأكد من أن الأصل يقدم نفس القيمة دون حضورك.',
+          ],
+          expectedOutputAr: 'أول أصل رقمي مسجل جاهز للاختبار مع العملاء.',
+        },
+        {
+          dayNumber: 3,
+          dayTitleAr: 'اليوم الثالث: اختبار الأصل مع عميلين حاليين',
+          focusAr: 'قياس قدرة العميل على فهم الأصل وتطبيقه دون مساعدة',
+          actionItems: [
+            'أرسل القالب أو الفيديو لعميلين واطلب منهم تطبيقه.',
+            'راقب: أين واجهوا صعوبة؟ ما الأسئلة التي طرحوها بعد المشاهدة؟',
+            'عدل صياغة القالب لتوضيح النقاط المبهمة.',
+          ],
+          expectedOutputAr: 'تحسين الأصل بناءً على تجربة استخدام واقعية.',
+        },
+        {
+          dayNumber: 4,
+          dayTitleAr: 'اليوم الرابع: تقنين مخرجات التدخل البشري (Scoping)',
+          focusAr: 'وضع سقف زمني ومخرجات ثابتة لجلسة المراجعة أو الفيدباك',
+          actionItems: [
+            'حدد بدقة: مراجعة واحدة مدتها 30 دقيقة مع وثيقة ملاحظات مكتوبة.',
+            'استبعد أي وعود بتقديم دعم غير محدود عبر واتساب أو رسائل صوتية.',
+            'اكتب نموذج التقرير النهائي الثابت لتسليمه في دقائق معدودة.',
+          ],
+          expectedOutputAr: 'نطاق عمل دقيق ومقنن للتسليم يضمن هوامش ربح عالية.',
+        },
+        {
+          dayNumber: 5,
+          dayTitleAr: 'اليوم الخامس: تسعير الحزمة المقننة وإعداد صفحة العرض',
+          focusAr: 'ربط السعر بنتيجة التحول المضمونة بدلاً من عدد ساعات العمل',
+          actionItems: [
+            'ضع تسعيرًا يعكس قيمة النتيجة المكتملة.',
+            'صغ وثيقة العرض في صفحة واحدة تلخص الخطوات والمخرجات.',
+            'حدد موعد فتح الدفعة الجديدة بسقف محدد.',
+          ],
+          expectedOutputAr: 'عرض المنتج المقنن جاهز للطرح المباشر.',
+        },
+        {
+          dayNumber: 6,
+          dayTitleAr: 'اليوم السادس: بيع أول نسختين بالنموذج المقنن الجديد',
+          focusAr: 'إثبات أن المشترين يقبلون الأصل المسجل مع جلسة المراجعة بنفس الرضا',
+          actionItems: [
+            'اطرح العرض على 5 مهتمين جدد وأكد تسليمهم بالهيكل المقنن.',
+            'أغلق الحجز المسبق واستلم الدفعات.',
+            'أدخلهم على المنصة وسلمهم الأصل الرقمي فورًا.',
+          ],
+          expectedOutputAr: 'تأكيد بيع أول حزم بالنموذج شبه المؤتمت الجديد.',
+        },
+        {
+          dayNumber: 7,
+          dayTitleAr: 'اليوم السابع: قياس وفر الوقت ومستوى رضا المشتري',
+          focusAr: 'مقارنة ساعات العمل المبذولة في النموذج القديم مقابل الجديد',
+          actionItems: [
+            'احسب الساعات المستغرقة لكل عميل (يجب أن تقل بنسبة 60% على الأقل).',
+            'احصل على تقييم العملاء لجودة التجربة.',
+            'اعتمد نموذج المنتج الرقمي كعرضك الأساسي القادم.',
+          ],
+          expectedOutputAr: 'إثبات نجاح تقنين التسليم والجاهزية لإطلاق العرض لجمهور أوسع.',
+        },
+      ],
+    };
+  }
+
+  // Mode 4: PAID_PILOT_LEARNING_SPRINT (Stage 4 - Has Paying Pilot / Deposits)
+  if (stageNum === 4) {
+    return {
+      sprintMode: 'PAID_PILOT_LEARNING_SPRINT',
+      sprintModeLabelAr: 'معسكر التعلم من الدفعات الأولى (Paid Pilot Learning Sprint)',
+      days: [
+        {
+          dayNumber: 1,
+          dayTitleAr: 'اليوم الأول: تدقيق دوافع المشترين الأوائل (Why Did They Pay?)',
+          focusAr: 'اكتشاف السبب الدقيق الذي جعل العميل يخرج بطاقته البنكية ويدفع لك',
+          actionItems: [
+            'تواصل مع كل مشتري دفع لك واسأله: "إيه الكلمة أو اللحظة اللي خلتك تقرر تدفع؟".',
+            'حدد النتيجة المحددة بدقة التي يتوقع استلامها في نهاية التجربة.',
+            'سجل مفرداتهم الدقيقة لاستخدامها كعنوان رئيسي لصفحة البيع القادمة.',
+          ],
+          expectedOutputAr: 'تفريغ حقيقي لمحركات الشراء الفعلية من واقع مشترين حقيقيين.',
+        },
+        {
+          dayNumber: 2,
+          dayTitleAr: 'اليوم الثاني: قياس سرعة الوصول لأول نتيجة (Time-to-First-Value)',
+          focusAr: 'تقليص الوقت بين استلام المنتج وأول شعور ملموس بالقيمة والإنجاز',
+          actionItems: [
+            'حدد: إيه أول مخرج يقدر العميل ينفذه في أول 24 إلى 48 ساعة؟',
+            'احذف أي معلومات تمهيدية طويلة تؤخر وصوله لهذا المخرج.',
+            'صمم خطوة بداية سريعة (Quick Win) تعزز ثقة العميل في قراره.',
+          ],
+          expectedOutputAr: 'مسار سريع يحقق أول نتيجة ملموسة للمشتري في أقل من يومين.',
+        },
+        {
+          dayNumber: 3,
+          dayTitleAr: 'اليوم الثالث: رصد نقاط الاحتكاك وأسئلة ما بعد الشراء',
+          focusAr: 'اكتشاف أين يتوقف المشترون أو يطلبون توضيحًا إضافيًا',
+          actionItems: [
+            'سجل كل سؤال أو استفسار طرحه المشتركون الأوائل بعد بدء الاستخدام.',
+            'حدد ما إذا كان التردد سببه غموض الخطوات أم صعوبة التطبيق الفني.',
+            'أنشئ فيديو قصيرًا مدته 3 دقائق لمعالجة النقطة الأكثر تكرارًا.',
+          ],
+          expectedOutputAr: 'سجل نقاط الاحتكاك (Friction Log) وخطة معالجتها التلقائية.',
+        },
+        {
+          dayNumber: 4,
+          dayTitleAr: 'اليوم الرابع: فصل ما يمكن توحيده عما يتطلب تدخلك الشخصي',
+          focusAr: 'تحديد حدود التوسع وحماية وقتك في النسخ القادمة',
+          actionItems: [
+            'افصل بدقة: ما هي الأسئلة التي يمكن الإجابة عنها بقالب أو روبريك ثابت؟',
+            'ما هو التدخل الفردي الوحيد الذي برر السعر المدفوع؟',
+            'حوّل الملاحظات المكررة إلى معايير تقييم ذاتي واضحة.',
+          ],
+          expectedOutputAr: 'خريطة أتمتة وتوحيد التسليم (Standardization Matrix).',
+        },
+        {
+          dayNumber: 5,
+          dayTitleAr: 'اليوم الخامس: استخلاص أول قصة نجاح موثقة (Case Study Capture)',
+          focusAr: 'توثيق النتيجة الملموسة التي حققها أول من طبق الحل',
+          actionItems: [
+            'أجرِ محادثة قصيرة مع العميل الأكثر التزامًا وسجل النتيجة بالأرقام قبل وبعد.',
+            'اطلب منه شهادة مكتوبة أو تسجيل صوتي يصف التحول والتجربة.',
+            'صغ دراسة حالة قصيرة من 150 كلمة لاستخدامها كدليل إثبات اجتماعي.',
+          ],
+          expectedOutputAr: 'أول قصة نجاح موثقة جاهزة لدعم إطلاق الدفعة التالية.',
+        },
+        {
+          dayNumber: 6,
+          dayTitleAr: 'اليوم السادس: صقل العرض ورفع السعر للدفعة التالية',
+          focusAr: 'تحديث هيكل التسعير والعرض بناءً على تجربة النسخة الأولية',
+          actionItems: [
+            'ارفع السعر بنسبة 20–50% بناءً على إثبات النتائج وإزالة نقاط الاحتكاك.',
+            'صغ حزمة العرض المحدثة مع إضافة دراسة الحالة وأول الشهادات.',
+            'حدد موعد فتح مقاعد الدفعة الثانية المحدودة.',
+          ],
+          expectedOutputAr: 'هيكل عرض وتسعير مطور جاهز لطرح الدفعة الموسعة.',
+        },
+        {
+          dayNumber: 7,
+          dayTitleAr: 'اليوم السابع: قرار بناء المنتج الكامل أو فتح دفعة ثانية',
+          focusAr: 'اتخاذ قرار استثماري استراتيجي مبني على بيانات التجربة الأولى',
+          actionItems: [
+            'إذا حقق 80% من المشتركين النتيجة: ابدأ تسجيل وتحويل المواد لمنتج شبه مؤتمت.',
+            'إذا احتاجت النتيجة لتعديلات: نفذ دفعة ثانية مصغرة للتأكد من سلاسة المسار.',
+            'ثبت تاريخ الإطلاق القادم.',
+          ],
+          expectedOutputAr: 'قرار استراتيجي نهائي يحدد الخطوة التالية بدقة وثقة.',
+        },
+      ],
+    };
+  }
+
+  // Mode 5: OFFER_VALIDATION_SPRINT (Stage 2 & 3 - Interest or Commitment Signals)
   if (stageNum === 2 || stageNum === 3) {
-    return [
-      {
-        dayNumber: 1,
-        dayTitleAr: 'اليوم الأول: فرز قائمة المهتمين وتحديد الفئة الأكثر جاهزية',
-        focusAr: 'تصفية المشترين المحتملين الأكثر إلحاحًا من بين من سجلوا أو تفاعلوا',
-        actionItems: [
-          'راجع قائمة المسجلين في قائمة الانتظار أو من راسلوك بالرسائل الخاصة.',
-          'صنفهم حسب درجة الحاجة وجاهزيتهم لتطبيق الحل فورًا.',
-          'حدد 10 أشخاص محددين للتواصل المباشر معهم هذا الأسبوع.',
-        ],
-        expectedOutputAr: 'قائمة بأول 10 مرشحين ذوي أولوية للتواصل التجريبي.',
-      },
-      {
-        dayNumber: 2,
-        dayTitleAr: 'اليوم الثاني: صياغة شروط النسخة التجريبية (Pilot Conditions)',
-        focusAr: 'تحديد تفاصيل النسخة المصغرة والسعر التشجيعي مقابل الملاحظات',
-        actionItems: [
-          'حدد تاريخ البدء ومدة التجربة والشكل الدقيق للتسليم.',
-          'حدد سعرًا أوليًا تشجيعيًا يضمن الجدية ولا يشكل عائقًا ماليًا.',
-          'جهّز صفحة بسيطة أو رسالة واضحة تلخص التحول والخطوات.',
-        ],
-        expectedOutputAr: 'هيكل متكامل للنسخة التجريبية جاهز للطرح المباشر.',
-      },
-      {
-        dayNumber: 3,
-        dayTitleAr: 'اليوم الثالث: محادثات التثبيت الفردية عبر الرسائل',
-        focusAr: 'إجراء محادثات فردية مع المرشحين العشرة لمعرفة جاهزيتهم',
-        actionItems: [
-          'تواصل مع كل مرشح واسأله: "هل المشكلة دي لسه قائمة عندك حاليًا؟".',
-          'اشرح لهم أنك تجهز دفعة تجريبية مغلقة لعدد محدود جداً لحل هذا التحدي.',
-          'سجل أسئلتهم واعتراضاتهم بدقة واستخدمها في توضيح العرض.',
-        ],
-        expectedOutputAr: 'فرز 5 إلى 7 أشخاص أبدوا رغبة قاطعة في الانضمام.',
-      },
-      {
-        dayNumber: 4,
-        dayTitleAr: 'اليوم الرابع: معالجة الاعتراضات وتأكيد الموعد النهائي',
-        focusAr: 'إزالة الغموض حول طريقة التسليم وضمان التزام المشتركين بالوقت',
-        actionItems: [
-          'أرسل توضيحًا لأي سؤال تكرر حول الوقت المطلوب من المشترك أسبوعيًا.',
-          'أكّد على موعد انطلاق الدفعة وموعد إغلاق باب الانضمام التجريبي.',
-          'جهّز رابط الدفع المباشر أو وسيلة استلام الحجز المسبق.',
-        ],
-        expectedOutputAr: 'وضوح تام لدى المشتركين المحتملين ورابط دفع جاهز.',
-      },
-      {
-        dayNumber: 5,
-        dayTitleAr: 'اليوم الخامس: فتح رابط الحجز المبكر بسعر الإطلاق التجريبي',
-        focusAr: 'طلب الالتزام المالي الفعلي من المهتمين المؤكدين',
-        actionItems: [
-          'أرسل رابط الدفع للمرشحين الذين أكدوا رغبتهم في اليوم الثالث.',
-          'راقب معدل التحويل وأكد استلام كل اشتراك شخصيًا برسالة ترحيب.',
-          'تابع باحترافية مع من تأخروا للتأكد إن كانت هناك مشكلة تقنية في الدفع.',
-        ],
-        expectedOutputAr: 'استلام أول دفعات حقيقية مؤكدة للنسخة التجريبية.',
-      },
-      {
-        dayNumber: 6,
-        dayTitleAr: 'اليوم السادس: استكمال المقاعد المحدودة للدفعة التجريبية',
-        focusAr: 'التواصل مع الشريحة التالية لملء المقاعد المتبقية إن وجدت',
-        actionItems: [
-          'أعلن للمهتمين المتبقين أن هناك مقعدين فقط متاحين قبل إغلاق التسجيل.',
-          'أجب عن أي استفسار أخير وأغلق التسجيل بمجرد وصولك للهدف (5 إلى 10 مشتركين).',
-          'أرسل للمشتركين استبيانًا قصيرًا حول مستواهم الحالي قبل الانطلاق.',
-        ],
-        expectedOutputAr: 'اكتمال مقاعد الدفعة الأولى وتأكيد التزام الجميع.',
-      },
-      {
-        dayNumber: 7,
-        dayTitleAr: 'اليوم السابع: قرار الانتقال للتنفيذ وتسليم التجربة',
-        focusAr: 'تقييم نتائج الحجز وتحديد خطة إعداد محتوى التجربة',
-        actionItems: [
-          'إذا اكتمل الهدف التجريبي: ابدأ إعداد مواد الأسبوع الأول وافتح القناة المغلقة.',
-          'إذا كان التحويل أقل من 3 مشتركين: راجع السعر أو طريقة صياغة النتيجة.',
-          'وثق تاريخ تسليم أول أصل للمشتركين لبدء الرحلة بنجاح.',
-        ],
-        expectedOutputAr: 'إعلان بدء النسخة التجريبية رسميًا وبدء التسليم الميداني.',
-      },
-    ];
+    return {
+      sprintMode: 'OFFER_VALIDATION_SPRINT',
+      sprintModeLabelAr: 'معسكر التحقق من صدى العرض والالتزام المالي (Offer Validation Sprint)',
+      days: [
+        {
+          dayNumber: 1,
+          dayTitleAr: 'اليوم الأول: فرز قائمة المهتمين وتحديد الفئة الأكثر جاهزية',
+          focusAr: 'تصفية المشترين المحتملين الأكثر إلحاحًا من بين من سجلوا أو تفاعلوا',
+          actionItems: [
+            'راجع قائمة المسجلين في قائمة الانتظار أو من راسلوك بالرسائل الخاصة.',
+            'صنفهم حسب درجة الحاجة وجاهزيتهم لتطبيق الحل فورًا.',
+            'حدد 10 أشخاص محددين للتواصل المباشر معهم هذا الأسبوع.',
+          ],
+          expectedOutputAr: 'قائمة بأول 10 مرشحين ذوي أولوية للتواصل التجريبي.',
+        },
+        {
+          dayNumber: 2,
+          dayTitleAr: 'اليوم الثاني: صياغة شروط النسخة التجريبية (Pilot Conditions)',
+          focusAr: 'تحديد تفاصيل النسخة المصغرة والسعر التشجيعي مقابل الملاحظات',
+          actionItems: [
+            'حدد تاريخ البدء ومدة التجربة والشكل الدقيق للتسليم.',
+            'حدد سعرًا أوليًا تشجيعيًا يضمن الجدية ولا يشكل عائقًا ماليًا.',
+            'جهّز صفحة بسيطة أو رسالة واضحة تلخص التحول والخطوات.',
+          ],
+          expectedOutputAr: 'هيكل متكامل للنسخة التجريبية جاهز للطرح المباشر.',
+        },
+        {
+          dayNumber: 3,
+          dayTitleAr: 'اليوم الثالث: محادثات التثبيت الفردية عبر الرسائل',
+          focusAr: 'إجراء محادثات فردية مع المرشحين العشرة لمعرفة جاهزيتهم',
+          actionItems: [
+            'تواصل مع كل مرشح واسأله: "هل المشكلة دي لسه قائمة عندك حاليًا؟".',
+            'اشرح لهم أنك تجهز دفعة تجريبية مغلقة لعدد محدود جداً لحل هذا التحدي.',
+            'سجل أسئلتهم واعتراضاتهم بدقة واستخدمها في توضيح العرض.',
+          ],
+          expectedOutputAr: 'فرز 5 إلى 7 أشخاص أبدوا رغبة قاطعة في الانضمام.',
+        },
+        {
+          dayNumber: 4,
+          dayTitleAr: 'اليوم الرابع: معالجة الاعتراضات وتأكيد الموعد النهائي',
+          focusAr: 'إزالة الغموض حول طريقة التسليم وضمان التزام المشتركين بالوقت',
+          actionItems: [
+            'أرسل توضيحًا لأي سؤال تكرر حول الوقت المطلوب من المشترك أسبوعيًا.',
+            'أكّد على موعد انطلاق الدفعة وموعد إغلاق باب الانضمام التجريبي.',
+            'جهّز رابط الدفع المباشر أو وسيلة استلام الحجز المسبق.',
+          ],
+          expectedOutputAr: 'وضوح تام لدى المشتركين المحتملين ورابط دفع جاهز.',
+        },
+        {
+          dayNumber: 5,
+          dayTitleAr: 'اليوم الخامس: فتح رابط الحجز المبكر بسعر الإطلاق التجريبي',
+          focusAr: 'طلب الالتزام المالي الفعلي من المهتمين المؤكدين',
+          actionItems: [
+            'أرسل رابط الدفع للمرشحين الذين أكدوا رغبتهم في اليوم الثالث.',
+            'راقب معدل التحويل وأكد استلام كل اشتراك شخصيًا برسالة ترحيب.',
+            'تابع باحترافية مع من تأخروا للتأكد إن كانت هناك مشكلة تقنية في الدفع.',
+          ],
+          expectedOutputAr: 'استلام أول دفعات حقيقية مؤكدة للنسخة التجريبية.',
+        },
+        {
+          dayNumber: 6,
+          dayTitleAr: 'اليوم السادس: استكمال المقاعد المحدودة للدفعة التجريبية',
+          focusAr: 'التواصل مع الشريحة التالية لملء المقاعد المتبقية إن وجدت',
+          actionItems: [
+            'أعلن للمهتمين المتبقين أن هناك مقعدين فقط متاحين قبل إغلاق التسجيل.',
+            'أجب عن أي استفسار أخير وأغلق التسجيل بمجرد وصولك للهدف (5 إلى 10 مشتركين).',
+            'أرسل للمشتركين استبيانًا قصيرًا حول مستواهم الحالي قبل الانطلاق.',
+          ],
+          expectedOutputAr: 'اكتمال مقاعد الدفعة الأولى وتأكيد التزام الجميع.',
+        },
+        {
+          dayNumber: 7,
+          dayTitleAr: 'اليوم السابع: قرار الانتقال للتنفيذ وتسليم التجربة',
+          focusAr: 'تقييم نتائج الحجز وتحديد خطة إعداد محتوى التجربة',
+          actionItems: [
+            'إذا اكتمل الهدف التجريبي: ابدأ إعداد مواد الأسبوع الأول وافتح القناة المغلقة.',
+            'إذا كان التحويل أقل من 3 مشتركين: راجع السعر أو طريقة صياغة النتيجة.',
+            'وثق تاريخ تسليم أول أصل للمشتركين لبدء الرحلة بنجاح.',
+          ],
+          expectedOutputAr: 'إعلان بدء النسخة التجريبية رسميًا وبدء التسليم الميداني.',
+        },
+      ],
+    };
   }
 
-  // Case C: Low Validation Maturity (Stage 0, 1 - Pure Assumption or Problem Evidence)
+  // Mode 6: DISCOVERY_SPRINT (Stage 0 & 1 - Pure Assumption or Problem Evidence)
   const hasAudience = answers.audienceAccessLevel === 'direct_daily' || answers.audienceAccessLevel === 'occasional';
   const day3Tasks = hasAudience
     ? [
@@ -1923,81 +2322,85 @@ function buildValidationSprint(
         'تواصل بأسلوب مهني مع 3 إلى 5 أشخاص لطلب رأيهم حول تحدياتهم الحالية دون محاولة بيع أي شيء.',
       ];
 
-  return [
-    {
-      dayNumber: 1,
-      dayTitleAr: 'اليوم الأول: تحرير الفرضية الأساسية',
-      focusAr: 'تحديد المشتري الدقيق والمشكلة الحرجة على الورق دون تجميل',
-      actionItems: [
-        'اكتب جملة واحدة تحدد المشتري بدقة وتستبعد الفئات غير المستهدفة.',
-        'حدد التكلفة الحقيقية لعدم حل المشكلة (بالمال، الساعات، أو الإجهاد).',
-        'حدد الافتراض الخطر الوحيد الذي لو سقط تسقط معه جدوى المنتج.',
-      ],
-      expectedOutputAr: 'ملف فرضية من صفحة واحدة يحدد العميل والنتيجة والافتراض الأكبر.',
-    },
-    {
-      dayNumber: 2,
-      dayTitleAr: 'اليوم الثاني: تجهيز أسئلة الاكتشاف السلوكية',
-      focusAr: 'إعداد أسئلة تركز على السلوك الماضي بدلاً من الآراء المجاملة',
-      actionItems: [
-        'جهّز 5 إلى 7 أسئلة اكتشاف تبدأ بـ "إيه اللي حصل آخر مرة..." و "بتتعامل إزاي دلوقتي مع...".',
-        'تجنب تمامًا سؤال "هل تحب تشتري كورس كذا؟" لأن إجابته المجاملة مضللة.',
-        'حدد القناة الأنسب للوصول للمستهدفين (رسائل خاصة، مكالمات، لقاءات).',
-      ],
-      expectedOutputAr: 'قائمة أسئلة جاهزة للرصد والاستماع.',
-    },
-    {
-      dayNumber: 3,
-      dayTitleAr: 'اليوم الثالث: محادثات الاكتشاف الواقعية',
-      focusAr: 'التحدث مع 5 على الأقل من الشريحة المستهدفة وتسجيل سلوكهم الحقيقي',
-      actionItems: day3Tasks,
-      expectedOutputAr: 'ملاحظات تفريغ مكتوبة تحتوي لغة العميل الحقيقية ومحاولاته السابقة.',
-    },
-    {
-      dayNumber: 4,
-      dayTitleAr: 'اليوم الرابع: تحليل الأنماط والاعتراضات المتكررة',
-      focusAr: 'تصفية البيانات لاكتشاف ما إذا كانت المشكلة مؤلمة حقًا للجميع',
-      actionItems: [
-        'هل تكررت نفس الشكوى بين أكثر من شخص وبنفس الحدة؟',
-        'ما هي البدائل التي حاولوا تطبيقها ولماذا فشلت أو لم ترضهم؟',
-        'ما هو السعر أو المقابل التقريبي الذي يبدو منطقيًا بناءً على خسارتهم؟',
-      ],
-      expectedOutputAr: 'جدول مقارنة بين افتراضاتك المبدئية وحقائق كلام العملاء.',
-    },
-    {
-      dayNumber: 5,
-      dayTitleAr: 'اليوم الخامس: صياغة العرض المصغر (Minimum Offer)',
-      focusAr: 'تحويل النتيجة إلى عرض مبكر جذاب ومحدد المعالم',
-      actionItems: [
-        'صغ رسالة عرض تلخص: المشكلة، الحل، شكل التسليم، وما لا يحتويه المنتج.',
-        'حدد سعرًا أوليًا تشجيعيًا للأولين مقابل تقديم ملاحظات صريحة.',
-        'حدد سقفًا لعدد المنضمين الأوائل لرفع جودة التجربة.',
-      ],
-      expectedOutputAr: 'مسودة رسالة عرض أولي من 200 إلى 300 كلمة جاهزة للعرض.',
-    },
-    {
-      dayNumber: 6,
-      dayTitleAr: 'اليوم السادس: طرح العرض على المجموعة المؤهلة',
-      focusAr: 'مواجهة السوق الحقيقية وطلب التزام مؤكد (دفع مبكر أو حجز مؤكد)',
-      actionItems: [
-        'تواصل شخصيًا مع الأشخاص الذين أبدوا اهتمامًا جادًا في محادثات اليوم الثالث.',
-        'اعرض عليهم العرض الأولي والمقاعد المحدودة للنسخة التجريبية.',
-        'راقب: هل يترددون بسبب السعر، أم بسبب عدم وضوح النتيجة، أم لعدم إلحاح المشكلة؟',
-      ],
-      expectedOutputAr: 'تسجيل الردود الفعلية وعدد الراغبين الجادين في الدفع.',
-    },
-    {
-      dayNumber: 7,
-      dayTitleAr: 'اليوم السابع: قرار الاستمرار / التعديل / التوقف',
-      focusAr: 'اتخاذ قرار مبني على الوقائع والأدلة بعيدًا عن العاطفة',
-      actionItems: [
-        'قارن النتائج بمعايير Stop/Go المحددة في التقرير.',
-        'إذا حصلت على التزامات جادة تغطي هدفك التجريبي: ابدأ بناء النسخة الأولية فورًا.',
-        'إذا كانت الردود "فكرة حلوة بس مش محتاجها دلوقتي": أعد صياغة العرض أو المشكلة.',
-      ],
-      expectedOutputAr: 'قرار تنفيذي نهائي موثق بالخطوة القادمة للأسبوع التالي.',
-    },
-  ];
+  return {
+    sprintMode: 'DISCOVERY_SPRINT',
+    sprintModeLabelAr: 'معسكر اكتشاف الألم والسلوك الواقعي (Customer Discovery Sprint)',
+    days: [
+      {
+        dayNumber: 1,
+        dayTitleAr: 'اليوم الأول: تحرير الفرضية الأساسية واستبعاد التخمين',
+        focusAr: 'تحديد المشتري الدقيق والمشكلة الحرجة على الورق دون تجميل',
+        actionItems: [
+          'اكتب جملة واحدة تحدد المشتري بدقة وتستبعد الفئات غير المستهدفة.',
+          'حدد التكلفة الحقيقية لعدم حل المشكلة (بالمال، الساعات، أو الإجهاد).',
+          'حدد الافتراض الخطر الوحيد الذي لو سقط تسقط معه جدوى المنتج.',
+        ],
+        expectedOutputAr: 'ملف فرضية من صفحة واحدة يحدد العميل والنتيجة والافتراض الأكبر.',
+      },
+      {
+        dayNumber: 2,
+        dayTitleAr: 'اليوم الثاني: تجهيز أسئلة الاكتشاف السلوكية',
+        focusAr: 'إعداد أسئلة تركز على السلوك الماضي بدلاً من الآراء المجاملة',
+        actionItems: [
+          'جهّز 5 إلى 7 أسئلة اكتشاف تبدأ بـ "إيه اللي حصل آخر مرة..." و "بتتعامل إزاي دلوقتي مع...".',
+          'تجنب تمامًا سؤال "هل تحب تشتري كورس كذا؟" لأن إجابته المجاملة مضللة.',
+          'حدد القناة الأنسب للوصول للمستهدفين (رسائل خاصة، مكالمات، لقاءات).',
+        ],
+        expectedOutputAr: 'قائمة أسئلة جاهزة للرصد والاستماع.',
+      },
+      {
+        dayNumber: 3,
+        dayTitleAr: 'اليوم الثالث: محادثات الاكتشاف الواقعية مع المستهدفين',
+        focusAr: 'التحدث مع 5 على الأقل من الشريحة المستهدفة وتسجيل سلوكهم الحقيقي',
+        actionItems: day3Tasks,
+        expectedOutputAr: 'ملاحظات تفريغ مكتوبة تحتوي لغة العميل الحقيقية ومحاولاته السابقة.',
+      },
+      {
+        dayNumber: 4,
+        dayTitleAr: 'اليوم الرابع: تحليل الأنماط والاعتراضات المتكررة',
+        focusAr: 'تصفية البيانات لاكتشاف ما إذا كانت المشكلة مؤلمة حقًا للجميع',
+        actionItems: [
+          'هل تكررت نفس الشكوى بين أكثر من شخص وبنفس الحدة؟',
+          'ما هي البدائل التي حاولوا تطبيقها ولماذا فشلت أو لم ترضهم؟',
+          'ما هو السعر أو المقابل التقريبي الذي يبدو منطقيًا بناءً على خسارتهم؟',
+        ],
+        expectedOutputAr: 'جدول مقارنة بين افتراضاتك المبدئية وحقائق كلام العملاء.',
+      },
+      {
+        dayNumber: 5,
+        dayTitleAr: 'اليوم الخامس: صياغة العرض المصغر (Minimum Testable Offer)',
+        focusAr: 'تحويل النتيجة إلى عرض مبكر جذاب ومحدد المعالم',
+        actionItems: [
+          'صغ رسالة عرض تلخص: المشكلة، الحل، شكل التسليم، وما لا يحتويه المنتج.',
+          'حدد سعرًا أوليًا تشجيعيًا للأولين مقابل تقديم ملاحظات صريحة.',
+          'حدد سقفًا لعدد المنضمين الأوائل لرفع جودة التجربة.',
+        ],
+        expectedOutputAr: 'مسودة رسالة عرض أولي من 200 إلى 300 كلمة جاهزة للعرض.',
+      },
+      {
+        dayNumber: 6,
+        dayTitleAr: 'اليوم السادس: طرح العرض على المجموعة المؤهلة',
+        focusAr: 'مواجهة السوق الحقيقية وطلب التزام مؤكد (دفع مبكر أو حجز مؤكد)',
+        actionItems: [
+          'تواصل شخصيًا مع الأشخاص الذين أبدوا اهتمامًا جادًا في محادثات اليوم الثالث.',
+          'اعرض عليهم العرض الأولي والمقاعد المحدودة للنسخة التجريبية.',
+          'راقب: هل يترددون بسبب السعر، أم بسبب عدم وضوح النتيجة، أم لعدم إلحاح المشكلة؟',
+        ],
+        expectedOutputAr: 'تسجيل الردود الفعلية وعدد الراغبين الجادين في الدفع.',
+      },
+      {
+        dayNumber: 7,
+        dayTitleAr: 'اليوم السابع: قرار الاستمرار / التعديل / التوقف (Stop / Go Decision)',
+        focusAr: 'اتخاذ قرار مبني على الوقائع والأدلة بعيدًا عن العاطفة',
+        actionItems: [
+          'قارن النتائج بمعايير Stop/Go المحددة في التقرير.',
+          'إذا حصلت على التزامات جادة تغطي هدفك التجريبي: ابدأ بناء النسخة الأولية فورًا.',
+          'إذا كانت الردود "فكرة حلوة بس مش محتاجها دلوقتي": أعد صياغة العرض أو المشكلة.',
+        ],
+        expectedOutputAr: 'قرار تنفيذي نهائي موثق بالخطوة القادمة للأسبوع التالي.',
+      },
+    ],
+  };
 }
 
 function buildDiscoveryQuestions(answers: QuestionnaireAnswers): DiscoveryQuestion[] {
@@ -2239,36 +2642,143 @@ function buildMissingData(
 function buildNextThreeQuestions(
   answers: QuestionnaireAnswers,
   validationMaturity?: ValidationMaturityInfo,
+  formatRecommendation?: ProductFormatInfo,
   ai?: AiStrategicInterpretation | null
 ): string[] {
   const stageNum = validationMaturity?.stageNumber ?? 0;
-  let base: string[];
+  const primaryEn = (formatRecommendation?.titleEn || '').toLowerCase();
+  const isMembership = primaryEn.includes('membership') || primaryEn.includes('community');
+  const demandList = (answers.demandEvidenceList || []) as string[];
 
-  if (stageNum >= 4) {
-    base = [
-      'إيه الأصل أو الروتين المتكرر اللي لو قدمته لعملائك الحاليين هيخليهم يستمروا في الاشتراك بعد الشهر الثالث؟',
-      'إزاي تقدر تقدم نفس التحول لـ 10 إلى 20 عميلاً في وقت واحد دون زيادة ساعات عملك الأسبوعية؟',
-      'مين أول 5 إلى 10 من عملائك الحاليين أو السابقين اللي تقدر تدعوهم هذا الأسبوع كأعضاء مؤسسين للنسخة الرقمية؟',
+  // Define uncertainty bank
+  const uncertainties: { category: string; priority: number; question: string }[] = [];
+
+  // 1. BUYER_CLARITY
+  if (answers.isBuyerBroadOrSpecific === 'broad_general' || !answers.targetBuyerDescription) {
+    uncertainties.push({
+      category: 'BUYER_CLARITY',
+      priority: 95,
+      question: `مين أول 5 إلى 10 أشخاص بالاسم في شبكتك أو جمهورك يمثلون الشريحة المستهدفة (${(answers.targetBuyerDescription || '').slice(0, 30)}) وتقدر تكلمهم هذا الأسبوع؟`,
+    });
+  }
+
+  // 2. DEMAND & WILLINGNESS TO PAY
+  if (stageNum <= 1) {
+    uncertainties.push({
+      category: 'DEMAND',
+      priority: 90,
+      question: 'إيه أكبر بديل أو حيلة مؤقتة بيستخدموها دلوقتي للتعامل مع المشكلة، وتكلفتها عليهم قد إيه؟',
+    });
+  }
+
+  // 3. PAID PILOT UNCERTAINTIES (For Stage 4)
+  if (stageNum === 4) {
+    uncertainties.push({
+      category: 'PAID_PILOT_WHY_PAID',
+      priority: 92,
+      question: 'ليه المشترون الأوائل قرروا يدفعوا بالتحديد؟ وإيه النتيجة الدقيقة اللي مستنيين استلامها؟',
+    });
+    uncertainties.push({
+      category: 'DELIVERY_STANDARDIZATION',
+      priority: 88,
+      question: 'أي جزء في تسليم الحل احتاج تخصيصًا فرديًا منك، وأي جزء تكرر ويمكن تحويله لقالب ثابت؟',
+    });
+    uncertainties.push({
+      category: 'TIME_TO_FIRST_VALUE',
+      priority: 85,
+      question: 'كام ساعة أو يوم استغرقها المشتري للوصول لأول نتيجة ملموسة بعد الشراء؟',
+    });
+  }
+
+  // 4. RECURRING VALUE & RETENTION (For Membership / Recurring models)
+  if (isMembership || answers.hasRecurringPaymentBehavior === 'recurring_monthly') {
+    uncertainties.push({
+      category: 'RECURRING_VALUE',
+      priority: 94,
+      question: 'ليه المشتري هيجدد اشتراكه في الشهر التاني والتالت بدل ما يكتفي بتحميل الملفات في الشهر الأول والرحيل؟',
+    });
+    uncertainties.push({
+      category: 'RETENTION_WORKLOAD',
+      priority: 86,
+      question: 'إيه العبء الأسبوعي الواقعي اللي هيتطلبه وجود 20 إلى 50 عضوًا نشطًا دون أن يلتهم وقتك الشخصي؟',
+    });
+  }
+
+  // 5. PERSONALIZATION DEPENDENCY & FEEDBACK CONFLICT
+  const wantsScale = answers.creatorTimePerCustomer === 'almost_none' || answers.creatorTimePerCustomer === 'under_30m';
+  const needsFeedback = answers.requiresPersonalFeedback === true || answers.personalFeedbackState === 'required';
+  if (wantsScale && needsFeedback) {
+    uncertainties.push({
+      category: 'PERSONALIZATION_DEPENDENCY',
+      priority: 93,
+      question: 'إيه نوع الفيدباك اللي لازم يخرج منك أنت شخصيًا، وإيه اللي ممكن يتحول لمعايير تصحيح ذاتية أو مراجعة جماعية؟',
+    });
+    uncertainties.push({
+      category: 'PRICING_SUPPORT',
+      priority: 87,
+      question: 'هل السعر المقترح يغطي تكلفة ساعات المراجعة البشرية، أم تحتاج لتبسيط النموذج ليصبح ذاتي الاستهلاك بالكامل؟',
+    });
+  }
+
+  // 6. DIFFERENTIATION & METHODOLOGY
+  if (answers.uniqueMethodType !== 'proprietary_framework') {
+    uncertainties.push({
+      category: 'DIFFERENTIATION',
+      priority: 80,
+      question: 'إزاي تصيغ خطوات حلك في 3 إلى 5 مراحل مسماة تميزك فورًا عن أي كورس أو محتوى مجاني على الإنترنت؟',
+    });
+  }
+
+  // 7. TRANSFORMATION CONTROLLABILITY
+  if (answers.transformationRealism === 'depends_on_many_external_factors') {
+    uncertainties.push({
+      category: 'TRANSFORMATION',
+      priority: 82,
+      question: 'إيه الجزء الواقع تمامًا تحت سيطرة المنهجية وتقدر تضمن وصول العميل إليه دون تعليق النتيجة على أطراف خارجية؟',
+    });
+  }
+
+  // Sort by priority and take top 3
+  uncertainties.sort((a, b) => b.priority - a.priority);
+  const selected = uncertainties.slice(0, 3).map((u) => u.question);
+
+  // Requirement #11: Stage-specific fallback question banks
+  // Stage 5 focuses on standardization, support burden, outcome consistency, reusable assets, operational capacity
+  // Stage 6 focuses on acquisition bottleneck, conversion bottleneck, delivery capacity, retention, economics, tracking
+  // A Stage 6 or Stage 5 user must NEVER receive beginner preorder/48h questions!
+  let fallbacks: string[] = [];
+  if (stageNum === 6) {
+    fallbacks = [
+      'ما هي القناة الإعلانية أو الشراكة التي ستحقق لك مضاعفة حجم المبيعات الشهرية دون رفع كلفة الاستقطاب؟',
+      'أين يكمن عنق الزجاجة الرئيسي الآن: في معدل التحويل (Conversion)، أم سعة التسليم، أم الاحتفاظ بالعملاء (Retention)؟',
+      'ما هي العملية أو الخطوة التشغيلية التي تستهلك أكبر وقت من فريقك حاليًا ويمكن أتمتتها بالكامل؟',
     ];
-  } else if (stageNum === 2 || stageNum === 3) {
-    base = [
-      'من بين الأشخاص الذين أبدوا اهتمامًا أو طلبوا حلاً، مين أول 3 مستعدين لدفع حجز مسبق اليوم؟',
-      'إيه أقل سعر تجريبي يجعل الانضمام للدفعة الأولى قرارًا بديهيًا دون تردد مالي؟',
-      'إيه النتيجة المحددة بدقة اللي لو وصل لها المشترك في أول 7 أيام هيعتبر تجربته ناجحة 100%؟',
+  } else if (stageNum === 5) {
+    fallbacks = [
+      'ما هي المكونات التي تتكرر لكل عميل ويمكن تحويلها لأصول رقمية مسجلة وقوالب ذاتية الاستخدام بنسبة 100%؟',
+      'ما هو الحد الأقصى لعدد المشتركين الجدد الذين يمكنك تسليمهم النتيجة شهريًا بنفس جودة التجربة الحالية؟',
+      'كيف تصيغ مصفوفة معايير الدعم الفني لحصر استفسارات العملاء وحلها خلال أقل من 15 دقيقة؟',
     ];
   } else {
-    base = [
-      `مين أول 5 إلى 10 أشخاص بالاسم في شبكتك أو جمهورك يمثلون الشريحة المستهدفة (${(answers.targetBuyerDescription || '').slice(0, 30)}) وتقدر تكلمهم هذا الأسبوع؟`,
-      'إيه أكبر بديل أو حيلة مؤقتة بيستخدموها دلوقتي للتعامل مع المشكلة، وتكلفتها عليهم إيه؟',
+    fallbacks = [
       'إيه أقل نسخة ملموسة من حلك تقدر تقدمها وتوصل العميل لأول نتيجة في أقل من 48 ساعة؟',
+      'من بين المهتمين الحاليين، مين أول 3 أشخاص تقدر تطلب منهم حجزًا مسبقًا هذا الأسبوع؟',
+      'إيه المعيار الرقمي المحدد اللي لو تحقق هتعتبر تجربة إطلاق الدفعة الأولى نجحت 100%؟',
     ];
+  }
+
+  while (selected.length < 3) {
+    const nextFb = fallbacks.shift();
+    if (nextFb && !selected.includes(nextFb)) {
+      selected.push(nextFb);
+    }
   }
 
   if (ai?.next_best_question) {
-    return [ai.next_best_question, base[0], base[1]];
+    return [ai.next_best_question, selected[0], selected[1]];
   }
 
-  return base;
+  return selected.slice(0, 3);
 }
 
 function buildPersonalizedNextStep(

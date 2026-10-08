@@ -174,7 +174,7 @@ export default function App() {
     coreProblem: string;
     desiredTransformation: string;
     productDirection: string;
-    uniqueMethodType: 'proprietary_framework' | 'general_skills_only' | 'developing_now';
+    uniqueMethodType: 'proprietary_framework' | 'general_skills_only' | 'developing_now' | 'not_selected';
     uniqueMethodOrProcess: string;
   }) => {
     setQuestionnaireDraft({
@@ -467,7 +467,10 @@ export default function App() {
                 <MvpRecommendationCard mvp={activeReport.mvp} />
 
                 {/* 9. 7-Day Validation Sprint */}
-                <ValidationSprintView sprint={activeReport.validationSprint} />
+                <ValidationSprintView
+                  sprint={activeReport.validationSprint}
+                  sprintModeLabelAr={activeReport.sprintModeLabelAr}
+                />
 
                 {/* 10. 7 Customer Discovery Questions */}
                 <DiscoveryQuestionsCard questions={activeReport.discoveryQuestions} />

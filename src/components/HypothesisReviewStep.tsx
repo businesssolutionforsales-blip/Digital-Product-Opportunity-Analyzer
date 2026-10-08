@@ -12,7 +12,7 @@ interface HypothesisReviewStepProps {
     coreProblem: string;
     desiredTransformation: string;
     productDirection: string;
-    uniqueMethodType: 'proprietary_framework' | 'general_skills_only' | 'developing_now';
+    uniqueMethodType: 'proprietary_framework' | 'general_skills_only' | 'developing_now' | 'not_selected';
     uniqueMethodOrProcess: string;
   }) => void;
   onBackToSuggestions: () => void;
@@ -31,14 +31,25 @@ export const HypothesisReviewStep: React.FC<HypothesisReviewStepProps> = ({
   const [desiredTransformation, setDesiredTransformation] = useState(candidate.desiredTransformation || '');
   const [productDirection, setProductDirection] = useState(candidate.possibleFormat || '');
 
-  // Requirement #3: Strict separation between general skills and proprietary framework
+  // Requirement: Neutral default 'not_selected' requiring explicit user choice
   const [uniqueMethodType, setUniqueMethodType] = useState<
-    'proprietary_framework' | 'general_skills_only' | 'developing_now'
-  >('general_skills_only');
+    'proprietary_framework' | 'general_skills_only' | 'developing_now' | 'not_selected'
+  >('not_selected');
   const [uniqueMethodText, setUniqueMethodText] = useState('');
+  const [methodValidationError, setMethodValidationError] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (uniqueMethodType === 'not_selected') {
+      setMethodValidationError('يرجى تحديد طبيعة خبرتك: هل تمتلك إطار عمل خاص أم تعتمد على مهارات عامة؟');
+      return;
+    }
+    if (uniqueMethodType === 'proprietary_framework' && !uniqueMethodText.trim()) {
+      setMethodValidationError('يرجى كتابة اسم المنهجية أو خطوات إطار العمل الخاص بك.');
+      return;
+    }
+    setMethodValidationError('');
+
     onConfirm({
       workingTitle: workingTitle.trim(),
       targetBuyer: targetBuyer.trim(),
@@ -292,6 +303,12 @@ export const HypothesisReviewStep: React.FC<HypothesisReviewStepProps> = ({
                   placeholder="مثال: نظام الخطوات الأربع لتأهيل العملاء (تحليل - تصفية - جذب - إغلاق)..."
                   className="w-full px-3.5 py-2.5 rounded-xl bg-[#040405] border border-[#F5BF1E]/60 text-xs sm:text-sm text-[#FCFCFA] focus:outline-none"
                 />
+              </div>
+            )}
+            {methodValidationError && (
+              <div className="mt-3 p-3 rounded-xl bg-red-950/40 border border-red-500/40 text-red-200 text-xs flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{methodValidationError}</span>
               </div>
             )}
           </div>

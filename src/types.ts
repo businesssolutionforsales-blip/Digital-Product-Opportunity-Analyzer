@@ -61,17 +61,33 @@ export interface DiscoveredCandidate {
 export type EvidenceType =
   | 'people_ask_me'
   | 'existing_clients_ask'
+  | 'inbound_requests'
   | 'audience_comments'
   | 'sold_related_work'
   | 'competitors_sell'
   | 'search_community_discussions'
   | 'waitlist_subscribers'
-  | 'preorders_deposits'
+  | 'free_waitlist'
+  | 'preorders_deposits' // backward-compat legacy
+  | 'purchase_commitment' // Stage 3 max (intent without money)
+  | 'paid_deposit' // Stage 4 money
+  | 'paid_preorder' // Stage 4 money
+  | 'paid_pilot' // Stage 4 money
   | 'none_yet';
 
 export type ProblemFrequency = 'daily' | 'weekly' | 'monthly' | 'occasional' | 'unsure' | 'not_selected';
 
 export type TimePerCustomer = 'almost_none' | 'under_30m' | '1_to_2h' | 'recurring_support' | 'high_touch' | 'not_selected';
+
+export type TriStateDelivery = 'required' | 'not_required' | 'unknown';
+
+export type SprintMode =
+  | 'DISCOVERY_SPRINT'
+  | 'OFFER_VALIDATION_SPRINT'
+  | 'PAID_PILOT_LEARNING_SPRINT'
+  | 'DELIVERY_VALIDATION_SPRINT'
+  | 'RECURRING_MODEL_VALIDATION_SPRINT'
+  | 'SCALE_READINESS_SPRINT';
 
 export interface QuestionnaireAnswers {
   // Path context
@@ -112,14 +128,36 @@ export interface QuestionnaireAnswers {
 
   // Section G — Delivery Constraints
   creatorTimePerCustomer: TimePerCustomer;
-  requiresPersonalFeedback: boolean | null;
-  requiresOneOnOneAccountability: boolean | null;
+  requiresPersonalFeedback: boolean | null; // legacy boolean
+  requiresOneOnOneAccountability: boolean | null; // legacy boolean
+  personalFeedbackState?: TriStateDelivery; // strict tri-state
+  oneOnOneAccountabilityState?: TriStateDelivery; // strict tri-state
 
-  // Section H — Monetization Context
+  // Section H — Monetization & Recurring Context
   expectedPriceTier: 'micro_under_50' | 'low_50_150' | 'mid_150_500' | 'premium_500_plus' | 'not_sure_yet' | 'not_selected';
   productRoleInBusiness: 'lead_tripwire' | 'core_flagship' | 'backend_service_feeder' | 'standalone' | 'unsure' | 'not_selected';
   existingAudienceChannel: string;
   hasExistingPayingClients: boolean | null;
+
+  // Explicit Recurring Business Evidence (Separate from ordinary payments)
+  hasRecurringPaymentBehavior?: 'recurring_monthly' | 'repeat_buyers_no_sub' | 'no' | 'unsure' | 'not_selected';
+  recurringBuyerCountApprox?: number | string;
+  explicitRecurringRequestReceived?: boolean | 'yes' | 'no' | 'unsure';
+  recurringValueReason?: string; // Why does the buyer need value in month 2 and 3?
+
+  // Explicit Repeatable Delivery Evidence (Required for Stage 5)
+  hasDeliveredSolutionMultipleTimes?: boolean | 'yes' | 'no' | 'not_yet';
+  understandsStandardVsCustomDelivery?: boolean | 'yes' | 'no' | 'unsure';
+  knowsActualDeliveryBurden?: boolean | 'yes' | 'no' | 'unsure';
+  hasRepeatableDeliveryProcess?: boolean | 'yes' | 'no' | 'developing';
+
+  // Explicit Scale Readiness Evidence (Required for Stage 6: yes | no | not_measured_yet)
+  hasRepeatableAcquisitionChannel?: boolean | 'yes' | 'no' | 'not_measured_yet';
+  hasStableLeadFlow?: boolean | 'yes' | 'no' | 'not_measured_yet';
+  hasMeasuredConversionRate?: boolean | 'yes' | 'no' | 'not_measured_yet';
+  hasRepeatProductSales?: boolean | 'yes' | 'no' | 'not_measured_yet';
+  hasDeliveryCapacityAndClearBottlenecks?: boolean | 'yes' | 'no' | 'not_measured_yet';
+  hasDocumentedRetentionData?: boolean | 'yes' | 'no' | 'not_measured_yet';
 
   // Provenance & Strategic Rigor
   fieldProvenance?: FieldProvenanceMap;
@@ -315,6 +353,8 @@ export interface StrategicReport {
   productConcept: ProductConcept;
   positioning: PositioningStatement;
   mvp: MvpRecommendation;
+  sprintMode?: SprintMode;
+  sprintModeLabelAr?: string;
   validationSprint: ValidationDay[];
   discoveryQuestions: DiscoveryQuestion[];
   stopGoRules: StopGoRules;

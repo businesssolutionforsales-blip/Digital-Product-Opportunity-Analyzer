@@ -1,0 +1,6 @@
+{
+  "name": "Digital Product Opportunity Analyzer",
+  "description": "محلل فرصة المنتج الرقمي - نظام استشاري لاختبار جدوى ومخاطر وتنسيق المنتجات الرقمية وخطط التحقق لصناع المحتوى والخبراء من Mohamed Adel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

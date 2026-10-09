@@ -2443,13 +2443,14 @@ async function ensureContactFields(apiKey) {
           {
             method: "POST",
             body: {
-              name: target.name,
+              fieldName: target.name,
               slug: target.slug
             }
           }
         );
         if (createRes.ok) {
           existingSlugs.add(slugKey);
+          console.log(`[SYSTEME CRM] Successfully created contact field "${target.slug}" (${target.name})`);
         } else {
           console.error("[SYSTEME CRM ERROR] Failed contact field creation", {
             slug: target.slug,
@@ -2477,6 +2478,21 @@ async function ensureContactFields(apiKey) {
         });
       }
     }
+  }
+  const missingManagedFields = MANAGED_FIELDS.filter(
+    (target) => !existingSlugs.has(target.slug.trim().toLowerCase())
+  );
+  if (missingManagedFields.length > 0) {
+    const missingSlugs = missingManagedFields.map((f) => f.slug);
+    console.error("[SYSTEME CRM ERROR] Missing required managed contact fields after creation attempt", {
+      missingSlugs,
+      totalMissing: missingSlugs.length
+    });
+    return {
+      success: false,
+      existingSlugs,
+      error: `Missing required DPOA contact fields: ${missingSlugs.join(", ")}`
+    };
   }
   return {
     success: true,
@@ -2676,17 +2692,24 @@ async function syncLeadToSysteme(params) {
       };
     }
     const appliedTags = [];
+    let requiredTagFailure = false;
     const sourceTagId = tagMap.get(MANAGED_TAGS.SOURCE);
     if (sourceTagId != null) {
       const ok = await assignTagToContact(apiKey, contactId, sourceTagId);
       if (ok) {
         appliedTags.push(MANAGED_TAGS.SOURCE);
       } else {
+        requiredTagFailure = true;
         console.error("[SYSTEME CRM ERROR] Failed contact tag assignment", {
           operation: "ASSIGN_SOURCE_TAG",
           tagName: MANAGED_TAGS.SOURCE
         });
       }
+    } else {
+      requiredTagFailure = true;
+      console.error("[SYSTEME CRM ERROR] SOURCE tag ID not found in tagMap", {
+        tagName: MANAGED_TAGS.SOURCE
+      });
     }
     if (params.marketingConsent) {
       const mktTagId = tagMap.get(MANAGED_TAGS.MARKETING_ELIGIBLE);
@@ -2695,12 +2718,29 @@ async function syncLeadToSysteme(params) {
         if (ok) {
           appliedTags.push(MANAGED_TAGS.MARKETING_ELIGIBLE);
         } else {
+          requiredTagFailure = true;
           console.error("[SYSTEME CRM ERROR] Failed contact tag assignment", {
             operation: "ASSIGN_MARKETING_TAG",
             tagName: MANAGED_TAGS.MARKETING_ELIGIBLE
           });
         }
+      } else {
+        requiredTagFailure = true;
+        console.error("[SYSTEME CRM ERROR] MARKETING_ELIGIBLE tag ID not found in tagMap", {
+          tagName: MANAGED_TAGS.MARKETING_ELIGIBLE
+        });
       }
+    }
+    if (requiredTagFailure) {
+      return {
+        attempted: true,
+        synced: false,
+        contactId,
+        isExisting,
+        tagsApplied: appliedTags,
+        fieldsUpdated: customFieldEntries.map((f) => f.slug),
+        error: "One or more required tag operations failed in Systeme.io"
+      };
     }
     return {
       attempted: true,

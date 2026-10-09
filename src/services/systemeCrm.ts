@@ -306,8 +306,8 @@ async function ensureContactFields(
   }
 
   // 2. Only after all pages have been checked, create missing managed fields
-  // Payload: { "name": "<field display name>", "slug": "<field slug>" }
-  // Do NOT send fieldName and do NOT send type: "text".
+  // Payload: { "fieldName": "<field display name>", "slug": "<field slug>" }
+  // Systeme.io API validation explicitly requires `fieldName` and `slug`.
   for (const target of MANAGED_FIELDS) {
     const slugKey = target.slug.trim().toLowerCase();
     if (!existingSlugs.has(slugKey)) {
@@ -318,7 +318,7 @@ async function ensureContactFields(
           {
             method: 'POST',
             body: {
-              name: target.name,
+              fieldName: target.name,
               slug: target.slug,
             },
           }
@@ -326,6 +326,7 @@ async function ensureContactFields(
 
         if (createRes.ok) {
           existingSlugs.add(slugKey);
+          console.log(`[SYSTEME CRM] Successfully created contact field "${target.slug}" (${target.name})`);
         } else {
           // Safe structured error logging (No PII, no credentials)
           console.error('[SYSTEME CRM ERROR] Failed contact field creation', {
@@ -359,6 +360,24 @@ async function ensureContactFields(
         });
       }
     }
+  }
+
+  // Check if all managed fields are confirmed present
+  const missingManagedFields = MANAGED_FIELDS.filter(
+    (target) => !existingSlugs.has(target.slug.trim().toLowerCase())
+  );
+
+  if (missingManagedFields.length > 0) {
+    const missingSlugs = missingManagedFields.map((f) => f.slug);
+    console.error('[SYSTEME CRM ERROR] Missing required managed contact fields after creation attempt', {
+      missingSlugs,
+      totalMissing: missingSlugs.length,
+    });
+    return {
+      success: false,
+      existingSlugs,
+      error: `Missing required DPOA contact fields: ${missingSlugs.join(', ')}`,
+    };
   }
 
   return {
@@ -619,6 +638,7 @@ export async function syncLeadToSysteme(params: {
 
     // 4. Tagging logic
     const appliedTags: string[] = [];
+    let requiredTagFailure = false;
 
     // Tag 1: Always add SOURCE tag to successfully synced contacts
     const sourceTagId = tagMap.get(MANAGED_TAGS.SOURCE);
@@ -627,11 +647,17 @@ export async function syncLeadToSysteme(params: {
       if (ok) {
         appliedTags.push(MANAGED_TAGS.SOURCE);
       } else {
+        requiredTagFailure = true;
         console.error('[SYSTEME CRM ERROR] Failed contact tag assignment', {
           operation: 'ASSIGN_SOURCE_TAG',
           tagName: MANAGED_TAGS.SOURCE,
         });
       }
+    } else {
+      requiredTagFailure = true;
+      console.error('[SYSTEME CRM ERROR] SOURCE tag ID not found in tagMap', {
+        tagName: MANAGED_TAGS.SOURCE,
+      });
     }
 
     // Tag 2: Add MARKETING_ELIGIBLE only if marketingConsent is true.
@@ -643,15 +669,33 @@ export async function syncLeadToSysteme(params: {
         if (ok) {
           appliedTags.push(MANAGED_TAGS.MARKETING_ELIGIBLE);
         } else {
+          requiredTagFailure = true;
           console.error('[SYSTEME CRM ERROR] Failed contact tag assignment', {
             operation: 'ASSIGN_MARKETING_TAG',
             tagName: MANAGED_TAGS.MARKETING_ELIGIBLE,
           });
         }
+      } else {
+        requiredTagFailure = true;
+        console.error('[SYSTEME CRM ERROR] MARKETING_ELIGIBLE tag ID not found in tagMap', {
+          tagName: MANAGED_TAGS.MARKETING_ELIGIBLE,
+        });
       }
     }
 
     // Tag 3: DPOA | Route is INTENTIONALLY NOT ADDED in this patch (Routing disabled)
+
+    if (requiredTagFailure) {
+      return {
+        attempted: true,
+        synced: false,
+        contactId,
+        isExisting,
+        tagsApplied: appliedTags,
+        fieldsUpdated: customFieldEntries.map((f) => f.slug),
+        error: 'One or more required tag operations failed in Systeme.io',
+      };
+    }
 
     return {
       attempted: true,

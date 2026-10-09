@@ -386,6 +386,7 @@ export interface LeadSubmission {
   primary_risk: string;
   creator_path: string;
   analysis_mode?: 'hybrid_ai' | 'rules_only';
+  answers?: QuestionnaireAnswers;
   utm_source?: string;
   utm_medium?: string;
   utm_campaign?: string;

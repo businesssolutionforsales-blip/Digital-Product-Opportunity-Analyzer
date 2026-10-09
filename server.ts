@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
+import { syncLeadToSysteme, recomputeAuthoritativeDiagnosis, sanitizeBusinessType } from './src/services/systemeCrm';
 
 dotenv.config();
 
@@ -17,22 +18,61 @@ async function startServer() {
 
   app.use(express.json({ limit: '10mb' }));
 
-  // API Route: Lead Webhook & Storage
+  // API Route: Lead Capture & Systeme.io CRM Integration
   app.post('/api/leads', async (req, res) => {
     try {
-      const leadData = req.body;
-      const webhookUrl = process.env.LEAD_WEBHOOK_URL;
+      const leadData = req.body || {};
+      const rawEmail = String(leadData.email || '');
+      const normalizedEmail = rawEmail.trim().toLowerCase();
+      const rawFirstName = String(leadData.first_name || '').trim();
+      const safeBusinessType = sanitizeBusinessType(String(leadData.business_type || ''));
+      const marketingConsent = leadData.marketing_consent === true || leadData.consent_given === true;
 
-      console.log('[LEAD RECEIVED]', {
-        email: leadData.email,
-        name: leadData.first_name,
-        report_delivery_requested: leadData.report_delivery_requested ?? true,
-        marketing_consent: Boolean(leadData.marketing_consent),
-        score: leadData.opportunity_score,
-        band: leadData.opportunity_band,
-        time: new Date().toISOString()
+      if (!normalizedEmail) {
+        return res.status(400).json({ success: false, error: 'Email is required' });
+      }
+
+      // 1. CRM Integrity Requirement (Critical):
+      // Do NOT trust score, band, confidence, stage, format, etc. sent by browser.
+      // Recompute the authoritative deterministic diagnosis server-side using submitted questionnaire answers.
+      const answers = leadData.answers || {};
+      const authoritativeReport = recomputeAuthoritativeDiagnosis(answers);
+
+      console.log('[LEAD SUBMISSION RECEIVED]', {
+        email: normalizedEmail,
+        name: rawFirstName,
+        businessType: safeBusinessType,
+        marketing_consent: marketingConsent,
+        authoritativeScore: authoritativeReport.opportunityScore,
+        authoritativeBand: authoritativeReport.opportunityBand.labelAr,
+        authoritativeStage: authoritativeReport.validationMaturity?.stageNumber ?? 0,
+        authoritativeFormat: authoritativeReport.formatRecommendation?.primary?.titleAr,
+        time: new Date().toISOString(),
       });
 
+      // 2. Synchronize to Systeme.io CRM server-side
+      // CRM failure must NEVER block the user from getting their report.
+      let crmStatus: any = { attempted: false, synced: false };
+      try {
+        crmStatus = await syncLeadToSysteme({
+          email: normalizedEmail,
+          firstName: rawFirstName,
+          businessType: safeBusinessType,
+          marketingConsent,
+          authoritativeReport,
+        });
+      } catch (crmErr: unknown) {
+        const msg = crmErr instanceof Error ? crmErr.message : 'Systeme sync unexpected error';
+        console.error('[SYSTEME CRM UNEXPECTED ERROR]', msg);
+        crmStatus = {
+          attempted: true,
+          synced: false,
+          error: 'CRM sync failed gracefully without blocking user',
+        };
+      }
+
+      // 3. Optional legacy webhook fallback (never required, never blocking)
+      const webhookUrl = process.env.LEAD_WEBHOOK_URL;
       let webhookDelivered = false;
       let webhookError: string | null = null;
 
@@ -41,7 +81,14 @@ async function startServer() {
           const resp = await fetch(webhookUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(leadData),
+            body: JSON.stringify({
+              ...leadData,
+              email: normalizedEmail,
+              opportunity_score: authoritativeReport.opportunityScore,
+              opportunity_band: authoritativeReport.opportunityBand.labelAr,
+              confidence_score: authoritativeReport.confidenceScore,
+              validation_stage: authoritativeReport.validationMaturity?.stageNumber ?? 0,
+            }),
           });
           webhookDelivered = resp.ok;
           if (!resp.ok) {
@@ -49,22 +96,36 @@ async function startServer() {
           }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : 'Unknown error';
-          console.error('[WEBHOOK ERROR]', message);
+          console.error('[LEGACY WEBHOOK ERROR]', message);
           webhookError = message;
         }
       }
 
+      // Always return 200 and access to the report regardless of CRM success/failure
       return res.status(200).json({
         success: true,
-        message: 'تم حفظ بياناتك بنجاح',
+        message: 'تم حفظ بياناتك وفتح التقرير بنجاح',
+        crm: {
+          attempted: crmStatus.attempted,
+          synced: crmStatus.synced,
+          isExisting: crmStatus.isExisting,
+          tagsApplied: crmStatus.tagsApplied,
+          fieldsUpdated: crmStatus.fieldsUpdated,
+          // Never return secret keys or sensitive tokens
+        },
         webhookDelivered,
         webhookConfigured: Boolean(webhookUrl && webhookUrl.startsWith('http')),
-        webhookError
+        webhookError,
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       console.error('[LEAD ROUTE ERROR]', err);
-      return res.status(500).json({ success: false, error: message });
+      // Non-blocking fallback: User should always be able to view their report
+      return res.status(200).json({
+        success: true,
+        message: 'تم فتح التقرير بنجاح',
+        crm: { attempted: false, synced: false, error: 'Internal processing handled gracefully' },
+      });
     }
   });
 

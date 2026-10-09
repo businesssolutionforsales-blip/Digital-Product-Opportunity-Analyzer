@@ -67,12 +67,34 @@ export const StrategicQuestionnaire: React.FC<StrategicQuestionnaireProps> = ({
     creatorTimePerCustomer: initialAnswers.creatorTimePerCustomer || 'not_selected',
     requiresPersonalFeedback: initialAnswers.requiresPersonalFeedback ?? null,
     requiresOneOnOneAccountability: initialAnswers.requiresOneOnOneAccountability ?? null,
+    personalFeedbackState: initialAnswers.personalFeedbackState || (initialAnswers.requiresPersonalFeedback === true ? 'required' : initialAnswers.requiresPersonalFeedback === false ? 'not_required' : 'unknown'),
+    oneOnOneAccountabilityState: initialAnswers.oneOnOneAccountabilityState || (initialAnswers.requiresOneOnOneAccountability === true ? 'required' : initialAnswers.requiresOneOnOneAccountability === false ? 'not_required' : 'unknown'),
+
+    // Repeatable Delivery Evidence (Conditional for paying clients / paid pilots)
+    hasDeliveredSolutionMultipleTimes: initialAnswers.hasDeliveredSolutionMultipleTimes || 'not_yet',
+    understandsStandardVsCustomDelivery: initialAnswers.understandsStandardVsCustomDelivery || 'unsure',
+    knowsActualDeliveryBurden: initialAnswers.knowsActualDeliveryBurden || 'unsure',
+    hasRepeatableDeliveryProcess: initialAnswers.hasRepeatableDeliveryProcess || 'developing',
 
     // Section H — Monetization Context
     expectedPriceTier: initialAnswers.expectedPriceTier || 'not_selected',
     productRoleInBusiness: initialAnswers.productRoleInBusiness || 'not_selected',
     existingAudienceChannel: initialAnswers.existingAudienceChannel || '',
     hasExistingPayingClients: initialAnswers.hasExistingPayingClients ?? null,
+
+    // Recurring Evidence
+    hasRecurringPaymentBehavior: initialAnswers.hasRecurringPaymentBehavior || 'not_selected',
+    recurringBuyerCountApprox: initialAnswers.recurringBuyerCountApprox ?? '',
+    explicitRecurringRequestReceived: initialAnswers.explicitRecurringRequestReceived || 'unsure',
+    recurringValueReason: initialAnswers.recurringValueReason || '',
+
+    // Scale Readiness Evidence
+    hasRepeatableAcquisitionChannel: initialAnswers.hasRepeatableAcquisitionChannel || 'not_measured_yet',
+    hasStableLeadFlow: initialAnswers.hasStableLeadFlow || 'not_measured_yet',
+    hasMeasuredConversionRate: initialAnswers.hasMeasuredConversionRate || 'not_measured_yet',
+    hasRepeatProductSales: initialAnswers.hasRepeatProductSales || 'not_measured_yet',
+    hasDeliveryCapacityAndClearBottlenecks: initialAnswers.hasDeliveryCapacityAndClearBottlenecks || 'not_measured_yet',
+    hasDocumentedRetentionData: initialAnswers.hasDocumentedRetentionData || 'not_measured_yet',
 
     // Provenance & Strategic Rigor
     fieldProvenance: initialAnswers.fieldProvenance || {},
@@ -183,7 +205,7 @@ export const StrategicQuestionnaire: React.FC<StrategicQuestionnaireProps> = ({
     }
   };
 
-  // Section validation checks
+  // Section validation checks (Strict validation rules - Requirements #6 & #12)
   const canProceedSection = (): boolean => {
     switch (currentSection) {
       case 0:
@@ -196,6 +218,49 @@ export const StrategicQuestionnaire: React.FC<StrategicQuestionnaireProps> = ({
         return answers.demandEvidenceList.length > 0;
       case 4:
         return Boolean(answers.beforeState.trim() && answers.afterState.trim());
+      case 5:
+        // Product Mechanism: require at least one mechanism or explicit not_specified_yet
+        return (
+          (answers.deliveryMechanism && answers.deliveryMechanism.length > 0) ||
+          Boolean(answers.creatorMethodSummary && answers.creatorMethodSummary.trim())
+        );
+      case 6: {
+        // Delivery: require creatorTimePerCustomer + feedback state + accountability state
+        const hasTime = answers.creatorTimePerCustomer && answers.creatorTimePerCustomer !== 'not_selected';
+        const hasFeedback = Boolean(answers.personalFeedbackState);
+        const hasAccountability = Boolean(answers.oneOnOneAccountabilityState);
+        return Boolean(hasTime && hasFeedback && hasAccountability);
+      }
+      case 7: {
+        // Monetization: require price tier + product role + paying-client answer
+        const hasPrice = answers.expectedPriceTier && answers.expectedPriceTier !== 'not_selected';
+        const hasRole = answers.productRoleInBusiness && answers.productRoleInBusiness !== 'not_selected';
+        const hasClients = answers.hasExistingPayingClients !== null;
+
+        if (!hasPrice || !hasRole || !hasClients) {
+          return false;
+        }
+
+        // Recurring question validation: if recurring behavior is recurring_monthly/repeat_buyers, require count
+        const recBehavior = answers.hasRecurringPaymentBehavior;
+        if (recBehavior === 'recurring_monthly' || recBehavior === 'repeat_buyers_no_sub') {
+          if (!answers.recurringBuyerCountApprox || String(answers.recurringBuyerCountApprox).trim() === '') {
+            return false;
+          }
+        }
+
+        // If recurring value reason prompt is shown and user indicated recurring intent/problem, require answer
+        const isRecurringContext =
+          answers.explicitRecurringRequestReceived === 'yes' ||
+          recBehavior === 'recurring_monthly' ||
+          recBehavior === 'repeat_buyers_no_sub';
+
+        if (isRecurringContext && (!answers.recurringValueReason || answers.recurringValueReason.trim().length === 0)) {
+          return false;
+        }
+
+        return true;
+      }
       default:
         return true;
     }
@@ -901,6 +966,7 @@ export const StrategicQuestionnaire: React.FC<StrategicQuestionnaireProps> = ({
                 { id: 'critique_feedback', label: 'ملاحظات وتقييم مباشر لأعمال المشتركين (Feedback)' },
                 { id: 'accountability', label: 'متابعة التزام ومهام محددة المواعيد (Accountability)' },
                 { id: 'community', label: 'مجتمع ونقاشات تفاعلية بين الأعضاء' },
+                { id: 'not_specified_yet', label: 'مش محدد لسه (قيد الاستكشاف)' },
               ].map((mech) => {
                 const isSelected = (answers.deliveryMechanism || []).includes(mech.id);
                 return (
@@ -1017,18 +1083,24 @@ export const StrategicQuestionnaire: React.FC<StrategicQuestionnaireProps> = ({
               })}
             </div>
 
-            {/* Tri-state Toggles (No biased pre-checked values) */}
+            {/* Tri-state Toggles (Strict Required / Not Required / Unknown) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
               <div className="p-4 rounded-xl bg-[#040405] border border-[#4A2F15] space-y-2">
                 <div className="text-xs font-bold text-[#FCFCFA]">
                   هل المنتج محتاج Feedback (ملاحظات شخصية منك)؟
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="grid grid-cols-3 gap-2 text-xs">
                   <button
                     type="button"
-                    onClick={() => setAnswers({ ...answers, requiresPersonalFeedback: true })}
-                    className={`py-2 px-3 rounded-lg border text-center transition-colors cursor-pointer ${
-                      answers.requiresPersonalFeedback === true
+                    onClick={() =>
+                      setAnswers({
+                        ...answers,
+                        personalFeedbackState: 'required',
+                        requiresPersonalFeedback: true,
+                      })
+                    }
+                    className={`py-2 px-2.5 rounded-lg border text-center transition-colors cursor-pointer ${
+                      answers.personalFeedbackState === 'required'
                         ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
                         : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
                     }`}
@@ -1037,14 +1109,37 @@ export const StrategicQuestionnaire: React.FC<StrategicQuestionnaireProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setAnswers({ ...answers, requiresPersonalFeedback: false })}
-                    className={`py-2 px-3 rounded-lg border text-center transition-colors cursor-pointer ${
-                      answers.requiresPersonalFeedback === false
+                    onClick={() =>
+                      setAnswers({
+                        ...answers,
+                        personalFeedbackState: 'not_required',
+                        requiresPersonalFeedback: false,
+                      })
+                    }
+                    className={`py-2 px-2.5 rounded-lg border text-center transition-colors cursor-pointer ${
+                      answers.personalFeedbackState === 'not_required'
                         ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
                         : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
                     }`}
                   >
                     لا، تعلم ذاتي
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAnswers({
+                        ...answers,
+                        personalFeedbackState: 'unknown',
+                        requiresPersonalFeedback: null,
+                      })
+                    }
+                    className={`py-2 px-2.5 rounded-lg border text-center transition-colors cursor-pointer ${
+                      answers.personalFeedbackState === 'unknown'
+                        ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
+                        : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
+                    }`}
+                  >
+                    مش متأكد لسه
                   </button>
                 </div>
               </div>
@@ -1053,12 +1148,18 @@ export const StrategicQuestionnaire: React.FC<StrategicQuestionnaireProps> = ({
                 <div className="text-xs font-bold text-[#FCFCFA]">
                   هل النتيجة تعتمد على متابعة فردية 1-on-1 مكثفة؟
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="grid grid-cols-3 gap-2 text-xs">
                   <button
                     type="button"
-                    onClick={() => setAnswers({ ...answers, requiresOneOnOneAccountability: true })}
-                    className={`py-2 px-3 rounded-lg border text-center transition-colors cursor-pointer ${
-                      answers.requiresOneOnOneAccountability === true
+                    onClick={() =>
+                      setAnswers({
+                        ...answers,
+                        oneOnOneAccountabilityState: 'required',
+                        requiresOneOnOneAccountability: true,
+                      })
+                    }
+                    className={`py-2 px-2.5 rounded-lg border text-center transition-colors cursor-pointer ${
+                      answers.oneOnOneAccountabilityState === 'required'
                         ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
                         : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
                     }`}
@@ -1067,18 +1168,186 @@ export const StrategicQuestionnaire: React.FC<StrategicQuestionnaireProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setAnswers({ ...answers, requiresOneOnOneAccountability: false })}
-                    className={`py-2 px-3 rounded-lg border text-center transition-colors cursor-pointer ${
-                      answers.requiresOneOnOneAccountability === false
+                    onClick={() =>
+                      setAnswers({
+                        ...answers,
+                        oneOnOneAccountabilityState: 'not_required',
+                        requiresOneOnOneAccountability: false,
+                      })
+                    }
+                    className={`py-2 px-2.5 rounded-lg border text-center transition-colors cursor-pointer ${
+                      answers.oneOnOneAccountabilityState === 'not_required'
                         ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
                         : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
                     }`}
                   >
-                    لا، يمكن استيعابها جماعيًا
+                    لا، يمكن جماعيًا
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAnswers({
+                        ...answers,
+                        oneOnOneAccountabilityState: 'unknown',
+                        requiresOneOnOneAccountability: null,
+                      })
+                    }
+                    className={`py-2 px-2.5 rounded-lg border text-center transition-colors cursor-pointer ${
+                      answers.oneOnOneAccountabilityState === 'unknown'
+                        ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
+                        : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
+                    }`}
+                  >
+                    مش متأكد لسه
                   </button>
                 </div>
               </div>
             </div>
+
+            {/* Conditional Subsection: Repeatable Delivery Evidence (Requirement #4) */}
+            {(answers.hasExistingPayingClients === true ||
+              answers.demandEvidenceList.includes('paid_pilot') ||
+              answers.demandEvidenceList.includes('paid_deposit') ||
+              answers.demandEvidenceList.includes('sold_related_work') ||
+              answers.demandEvidenceList.includes('preorders_deposits')) && (
+              <div className="mt-6 pt-5 border-t border-[#4A2F15]/60 space-y-4">
+                <div>
+                  <span className="text-xs text-[#F5BF1E] font-semibold tracking-wide flex items-center gap-1.5">
+                    <Check className="w-4 h-4 text-[#F5BF1E]" />
+                    أدلة تكرار التسليم (Repeatable Delivery Verification)
+                  </span>
+                  <p className="text-[11px] text-[#C8C5BA] mt-1 leading-relaxed">
+                    لأن لديك عملاء سابقين أو تجارب مدفوعة، نحتاج التحقق من قابلية خطوات التسليم للتكرار دون إعادة اختراعها لكل عميل.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
+                  {/* Q1: delivered multiple times */}
+                  <div className="p-3.5 rounded-xl bg-[#040405] border border-[#4A2F15]/60 space-y-2">
+                    <div className="font-semibold text-[#FCFCFA] leading-snug">
+                      هل قدمت نفس الحل أو نتيجة قريبة منه لأكثر من عميل بشكل متكرر؟
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => setAnswers({ ...answers, hasDeliveredSolutionMultipleTimes: 'yes' })}
+                        className={`py-2 px-2 rounded-lg border text-center transition-colors cursor-pointer ${
+                          answers.hasDeliveredSolutionMultipleTimes === 'yes'
+                            ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
+                            : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
+                        }`}
+                      >
+                        نعم، لعملاء متعددين
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAnswers({ ...answers, hasDeliveredSolutionMultipleTimes: 'not_yet' })}
+                        className={`py-2 px-2 rounded-lg border text-center transition-colors cursor-pointer ${
+                          answers.hasDeliveredSolutionMultipleTimes === 'not_yet'
+                            ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
+                            : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
+                        }`}
+                      >
+                        ليس بعد (عميل واحد أو قيد التجربة)
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Q2: standard vs custom */}
+                  <div className="p-3.5 rounded-xl bg-[#040405] border border-[#4A2F15]/60 space-y-2">
+                    <div className="font-semibold text-[#FCFCFA] leading-snug">
+                      هل عارف بوضوح إيه الجزء الثابت في التسليم وإيه الجزء اللي بيتغير من عميل للتاني؟
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => setAnswers({ ...answers, understandsStandardVsCustomDelivery: 'yes' })}
+                        className={`py-2 px-2 rounded-lg border text-center transition-colors cursor-pointer ${
+                          answers.understandsStandardVsCustomDelivery === 'yes'
+                            ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
+                            : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
+                        }`}
+                      >
+                        نعم، الحدود واضحة
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAnswers({ ...answers, understandsStandardVsCustomDelivery: 'unsure' })}
+                        className={`py-2 px-2 rounded-lg border text-center transition-colors cursor-pointer ${
+                          answers.understandsStandardVsCustomDelivery === 'unsure'
+                            ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
+                            : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
+                        }`}
+                      >
+                        ما زال يتغير بشكل مخصص
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Q3: actual burden */}
+                  <div className="p-3.5 rounded-xl bg-[#040405] border border-[#4A2F15]/60 space-y-2">
+                    <div className="font-semibold text-[#FCFCFA] leading-snug">
+                      هل عندك تصور واقعي للوقت والمجهود اللي بياخده تسليم النتيجة لكل عميل؟
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => setAnswers({ ...answers, knowsActualDeliveryBurden: 'yes' })}
+                        className={`py-2 px-2 rounded-lg border text-center transition-colors cursor-pointer ${
+                          answers.knowsActualDeliveryBurden === 'yes'
+                            ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
+                            : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
+                        }`}
+                      >
+                        نعم، محسوب بدقة
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAnswers({ ...answers, knowsActualDeliveryBurden: 'unsure' })}
+                        className={`py-2 px-2 rounded-lg border text-center transition-colors cursor-pointer ${
+                          answers.knowsActualDeliveryBurden === 'unsure'
+                            ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
+                            : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
+                        }`}
+                      >
+                        غير مؤكد بدقة بعد
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Q4: repeatable process */}
+                  <div className="p-3.5 rounded-xl bg-[#040405] border border-[#4A2F15]/60 space-y-2">
+                    <div className="font-semibold text-[#FCFCFA] leading-snug">
+                      هل خطوات التسليم نفسها بقت قابلة للتكرار بدون إعادة اختراع العملية كل مرة؟
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => setAnswers({ ...answers, hasRepeatableDeliveryProcess: 'yes' })}
+                        className={`py-2 px-2 rounded-lg border text-center transition-colors cursor-pointer ${
+                          answers.hasRepeatableDeliveryProcess === 'yes'
+                            ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
+                            : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
+                        }`}
+                      >
+                        نعم، قابلة للتكرار مباشرة
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAnswers({ ...answers, hasRepeatableDeliveryProcess: 'developing' })}
+                        className={`py-2 px-2 rounded-lg border text-center transition-colors cursor-pointer ${
+                          answers.hasRepeatableDeliveryProcess === 'developing'
+                            ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
+                            : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
+                        }`}
+                      >
+                        قيد التوثيق والتطوير
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1151,6 +1420,16 @@ export const StrategicQuestionnaire: React.FC<StrategicQuestionnaireProps> = ({
                     title: 'تأهيل وتغذية خدمة ذات سعر أعلى',
                     desc: 'يصفي العملاء الجادين للاستشارات والخدمات',
                   },
+                  {
+                    id: 'standalone',
+                    title: 'منتج مستقل جانبي (Side Asset)',
+                    desc: 'دخل إضافي دون الاعتماد عليه كليًا',
+                  },
+                  {
+                    id: 'unsure',
+                    title: 'مش محدد لسه (قيد الاستكشاف)',
+                    desc: 'سيتحدد دوره بناءً على استجابة السوق',
+                  },
                 ].map((role) => (
                   <button
                     type="button"
@@ -1199,6 +1478,217 @@ export const StrategicQuestionnaire: React.FC<StrategicQuestionnaireProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* Conditional Subsection 1: Recurring Business Evidence (Requirement #1) */}
+            <div className="p-4 rounded-xl bg-[#040405] border border-[#4A2F15] space-y-3.5">
+              <div className="text-xs font-bold text-[#FCFCFA] leading-snug">
+                هل عندك عملاء بيدفعوا بشكل متكرر بالفعل لحل المشكلة دي أو حاجة قريبة منها؟
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                {[
+                  {
+                    id: 'recurring_monthly',
+                    title: 'نعم — في دفع شهري أو دوري مستمر',
+                    desc: 'اشتراك أو متابعة شهرية قائمة',
+                  },
+                  {
+                    id: 'repeat_buyers_no_sub',
+                    title: 'بعض العملاء بيرجعوا يشتروا مرة تانية لكن بدون اشتراك ثابت',
+                    desc: 'تكرار شراء متفرق دون التزام دوري',
+                  },
+                  {
+                    id: 'no',
+                    title: 'لا',
+                    desc: 'كل عملية دفع هي معاملة واحدة منفصلة',
+                  },
+                  {
+                    id: 'unsure',
+                    title: 'مش متأكد',
+                    desc: 'لم يتم قياس سلوك إعادة الشراء بعد',
+                  },
+                ].map((opt) => (
+                  <button
+                    type="button"
+                    key={opt.id}
+                    onClick={() =>
+                      setAnswers({
+                        ...answers,
+                        hasRecurringPaymentBehavior: opt.id as any,
+                      })
+                    }
+                    className={`p-3 rounded-xl border text-right transition-colors cursor-pointer ${
+                      answers.hasRecurringPaymentBehavior === opt.id
+                        ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA]'
+                        : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
+                    }`}
+                  >
+                    <div className="font-semibold text-xs">{opt.title}</div>
+                    <div className="text-[10px] text-[#797979] mt-0.5">{opt.desc}</div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Follow-up if recurring_monthly or repeat_buyers_no_sub */}
+              {(answers.hasRecurringPaymentBehavior === 'recurring_monthly' ||
+                answers.hasRecurringPaymentBehavior === 'repeat_buyers_no_sub') && (
+                <div className="pt-2 border-t border-[#4A2F15]/40 space-y-2">
+                  <label className="block text-xs font-semibold text-[#FCFCFA]">
+                    تقريبًا كام عميل عنده السلوك ده؟
+                  </label>
+                  <input
+                    type="text"
+                    value={answers.recurringBuyerCountApprox || ''}
+                    onChange={(e) =>
+                      setAnswers({ ...answers, recurringBuyerCountApprox: e.target.value })
+                    }
+                    placeholder="مثال: 5، 12، 20..."
+                    className="w-full px-3.5 py-2 rounded-xl bg-[#23170D]/40 border border-[#4A2F15] focus:border-[#F5BF1E] text-xs text-[#FCFCFA] placeholder-[#797979] focus:outline-none"
+                  />
+                </div>
+              )}
+
+              {/* Follow-up: explicit recurring request */}
+              <div className="pt-3 border-t border-[#4A2F15]/40 space-y-2">
+                <div className="text-xs font-semibold text-[#FCFCFA]">
+                  هل في عملاء طلبوا منك بشكل واضح متابعة دورية أو جروب مستمر أو اشتراك؟
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  {[
+                    { id: 'yes', label: 'نعم، طلبوا صراحة' },
+                    { id: 'no', label: 'لا، لم يطلبوا' },
+                    { id: 'unsure', label: 'مش متأكد' },
+                  ].map((reqOpt) => (
+                    <button
+                      type="button"
+                      key={reqOpt.id}
+                      onClick={() =>
+                        setAnswers({
+                          ...answers,
+                          explicitRecurringRequestReceived: reqOpt.id as any,
+                        })
+                      }
+                      className={`py-2 px-2.5 rounded-lg border text-center transition-colors cursor-pointer ${
+                        answers.explicitRecurringRequestReceived === reqOpt.id
+                          ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
+                          : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
+                      }`}
+                    >
+                      {reqOpt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Follow-up: value in month 2 and month 3 */}
+              {(answers.explicitRecurringRequestReceived === 'yes' ||
+                answers.hasRecurringPaymentBehavior === 'recurring_monthly' ||
+                answers.hasRecurringPaymentBehavior === 'repeat_buyers_no_sub' ||
+                answers.problemFrequency === 'weekly' ||
+                answers.problemFrequency === 'daily' ||
+                answers.problemFrequency === 'monthly') && (
+                <div className="pt-3 border-t border-[#4A2F15]/40 space-y-2">
+                  <label className="block text-xs font-semibold text-[#FCFCFA]">
+                    إيه القيمة اللي العميل هيحتاج يرجع عشانها في الشهر الثاني والثالث؟
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={answers.recurringValueReason || ''}
+                    onChange={(e) =>
+                      setAnswers({ ...answers, recurringValueReason: e.target.value })
+                    }
+                    placeholder="مثال: مراجعة حالات أسبوعية مستمرة، تدريبات وتحديثات مع كل إصدار جديد، مساءلة ومجتمع لتطبيق الخطوات..."
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#23170D]/40 border border-[#4A2F15] focus:border-[#F5BF1E] text-xs text-[#FCFCFA] placeholder-[#797979] focus:outline-none resize-none"
+                  />
+                  <p className="text-[10px] text-[#797979]">
+                    * تكرار المشكلة وحده لا يبرر استمرار الاشتراك. يجب أن توجد آلية استمرار حقيقية (تحديثات، ممارسة، مراجعة، أو شبكة).
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Conditional Subsection 2: Scale Readiness (Requirement #5) */}
+            {(answers.hasExistingPayingClients === true ||
+              answers.demandEvidenceList.includes('paid_pilot') ||
+              answers.demandEvidenceList.includes('sold_related_work') ||
+              answers.hasDeliveredSolutionMultipleTimes === 'yes') && (
+              <div className="p-4 rounded-xl bg-[#040405] border border-[#F5BF1E]/40 space-y-3.5">
+                <div>
+                  <span className="text-xs text-[#F5BF1E] font-bold tracking-wide flex items-center gap-1.5">
+                    <Check className="w-4 h-4 text-[#F5BF1E]" />
+                    جاهزية التوسع — Scale Readiness
+                  </span>
+                  <p className="text-[11px] text-[#C8C5BA] mt-1 leading-relaxed">
+                    تقييم استقرار قنوات الاستقطاب والبيانات التشغيلية. مخصص للتحقق من أهلية مرحلة التوسع (Stage 6).
+                  </p>
+                </div>
+
+                <div className="space-y-3 text-xs">
+                  {[
+                    {
+                      key: 'hasRepeatableAcquisitionChannel',
+                      label: 'قناة اكتساب بتجيب عملاء بشكل متكرر وقابل للتنبؤ',
+                    },
+                    {
+                      key: 'hasStableLeadFlow',
+                      label: 'تدفق Leads ثابت نسبيًا أسبوعيًا/شهريًا',
+                    },
+                    {
+                      key: 'hasMeasuredConversionRate',
+                      label: 'Conversion Rate مقاس وموثق لصفحات الهبوط أو العروض',
+                    },
+                    {
+                      key: 'hasRepeatProductSales',
+                      label: 'مبيعات متكررة للمنتج أو العرض لنفس الجمهور',
+                    },
+                    {
+                      key: 'hasDeliveryCapacityAndClearBottlenecks',
+                      label: 'قدرة تسليم معروفة واختناقات التشغيل مفهومة ومحلولة',
+                    },
+                    {
+                      key: 'hasDocumentedRetentionData',
+                      label: 'بيانات Retention / Renewal موثقة لو النموذج دوري أو متكرر',
+                    },
+                  ].map((scaleItem) => {
+                    const currentVal = (answers as any)[scaleItem.key] || 'not_measured_yet';
+                    return (
+                      <div
+                        key={scaleItem.key}
+                        className="p-3 rounded-xl bg-[#23170D]/30 border border-[#4A2F15]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                      >
+                        <span className="text-xs text-[#FCFCFA] font-medium">
+                          {scaleItem.label}
+                        </span>
+                        <div className="grid grid-cols-3 gap-1.5 shrink-0 text-[11px]">
+                          {[
+                            { id: 'yes', label: 'نعم' },
+                            { id: 'no', label: 'لا' },
+                            { id: 'not_measured_yet', label: 'لم يُقس بعد' },
+                          ].map((choice) => (
+                            <button
+                              type="button"
+                              key={choice.id}
+                              onClick={() =>
+                                setAnswers({
+                                  ...answers,
+                                  [scaleItem.key]: choice.id as any,
+                                })
+                              }
+                              className={`py-1.5 px-2.5 rounded-lg border text-center transition-colors cursor-pointer ${
+                                currentVal === choice.id
+                                  ? 'border-[#F5BF1E] bg-[#23170D] text-[#FCFCFA] font-bold'
+                                  : 'border-[#4A2F15]/40 bg-[#040405] text-[#C8C5BA]'
+                              }`}
+                            >
+                              {choice.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

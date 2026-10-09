@@ -54,6 +54,7 @@ export async function submitLeadReport(
     primary_risk: report.executiveDiagnosis.biggestRiskAr,
     creator_path: report.answers.userPath,
     analysis_mode: report.analysisMode,
+    answers: report.answers,
     ...utms,
   };
 

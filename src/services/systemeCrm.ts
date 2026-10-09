@@ -78,6 +78,18 @@ export function recomputeAuthoritativeDiagnosis(
   return analyzeOpportunity(answers, null);
 }
 
+function sanitizeSystemeError(data: any, text: string): string {
+  if (data && typeof data === 'object') {
+    // If it has errors or message
+    const msg = data.message || data.error || (Array.isArray(data.errors) ? data.errors.map((e: any) => e.message || JSON.stringify(e)).join('; ') : '');
+    if (msg) {
+      return String(msg).replace(/Bearer\s+[A-Za-z0-9_-]+/gi, '[REDACTED]').replace(/[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/g, '[REDACTED]');
+    }
+  }
+  const cleanText = text.replace(/Bearer\s+[A-Za-z0-9_-]+/gi, '[REDACTED]').replace(/[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/g, '[REDACTED]');
+  return cleanText.slice(0, 300);
+}
+
 /**
  * Safe fetch helper for Systeme.io API
  */
@@ -89,7 +101,7 @@ async function systemeFetch<T>(
     body?: any;
     mergePatch?: boolean;
   } = {}
-): Promise<{ ok: boolean; status: number; data?: T; errorText?: string }> {
+): Promise<{ ok: boolean; status: number; data?: T; errorText?: string; rawBody?: any }> {
   const url = `https://api.systeme.io/api${endpoint}`;
   const headers: Record<string, string> = {
     'X-API-Key': apiKey,
@@ -120,15 +132,17 @@ async function systemeFetch<T>(
     }
 
     if (!res.ok) {
+      const sanitized = sanitizeSystemeError(data, text);
       return {
         ok: false,
         status: res.status,
         data,
-        errorText: `HTTP ${res.status}: ${text.slice(0, 300)}`,
+        rawBody: data,
+        errorText: `HTTP ${res.status}: ${sanitized}`,
       };
     }
 
-    return { ok: true, status: res.status, data };
+    return { ok: true, status: res.status, data, rawBody: data };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Network failure';
     return { ok: false, status: 0, errorText: msg };
@@ -312,12 +326,37 @@ async function ensureContactFields(
 
         if (createRes.ok) {
           existingSlugs.add(slugKey);
-        } else if (createRes.status === 422 || createRes.status === 409) {
-          // If already exists, mark present
-          existingSlugs.add(slugKey);
+        } else {
+          // Safe structured error logging (No PII, no credentials)
+          console.error('[SYSTEME CRM ERROR] Failed contact field creation', {
+            slug: target.slug,
+            status: createRes.status,
+            error: createRes.errorText,
+          });
+
+          // Do NOT treat a failed custom field creation as successful.
+          // Do NOT assume every HTTP 422 or 409 means the field already exists; verify by re-fetching the field list.
+          if (createRes.status === 422 || createRes.status === 409) {
+            const recheck = await fetchAllCollectionPages<SystemeContactField>(apiKey, '/contact_fields');
+            if (recheck.success) {
+              const recheckSlugs = new Set(
+                recheck.items
+                  .filter((f) => f && typeof f.slug === 'string' && f.slug.trim())
+                  .map((f) => f.slug!.trim().toLowerCase())
+              );
+              if (recheckSlugs.has(slugKey)) {
+                existingSlugs.add(slugKey);
+                console.log(`[SYSTEME CRM] Verified field "${target.slug}" exists in Systeme.io after refetch.`);
+              }
+            }
+          }
         }
       } catch (e) {
-        console.warn(`[SYSTEME CRM] Failed to create contact field "${target.slug}":`, e);
+        const msg = e instanceof Error ? e.message : 'Unknown exception';
+        console.error('[SYSTEME CRM ERROR] Exception during contact field creation', {
+          slug: target.slug,
+          error: msg,
+        });
       }
     }
   }
@@ -488,12 +527,18 @@ export async function syncLeadToSysteme(params: {
       // Contact update integrity:
       // If that update fails, do NOT silently return synced: true.
       if (!patchRes.ok) {
+        console.error('[SYSTEME CRM ERROR] Failed contact PATCH operation', {
+          operation: 'PATCH_EXISTING_CONTACT',
+          status: patchRes.status,
+          error: patchRes.errorText,
+          updatedFieldSlugs: customFieldEntries.map((f) => f.slug),
+        });
         return {
           attempted: true,
           synced: false,
           contactId,
           isExisting: true,
-          error: patchRes.errorText || `Failed to update contact ${contactId} in Systeme.io (HTTP ${patchRes.status})`,
+          error: patchRes.errorText || `Failed to update contact in Systeme.io (HTTP ${patchRes.status})`,
         };
       }
     } else {
@@ -515,6 +560,12 @@ export async function syncLeadToSysteme(params: {
       if (createRes.ok && createRes.data?.id != null) {
         contactId = createRes.data.id;
       } else {
+        console.warn('[SYSTEME CRM WARN] Initial contact creation not successful, attempting lookup and PATCH', {
+          operation: 'POST_CONTACT_FAILED',
+          status: createRes.status,
+          error: createRes.errorText,
+        });
+
         // If create failed (e.g. race condition where contact exists), attempt lookup and PATCH
         const refetch = await findContactByEmail(apiKey, normalizedEmail);
         if (refetch?.id != null) {
@@ -526,15 +577,26 @@ export async function syncLeadToSysteme(params: {
             body: createPayload,
           });
           if (!patchRetry.ok) {
+            console.error('[SYSTEME CRM ERROR] Failed contact PATCH operation on retry', {
+              operation: 'PATCH_RETRY_AFTER_LOOKUP',
+              status: patchRetry.status,
+              error: patchRetry.errorText,
+              updatedFieldSlugs: customFieldEntries.map((f) => f.slug),
+            });
             return {
               attempted: true,
               synced: false,
               contactId,
               isExisting: true,
-              error: patchRetry.errorText || `Failed to update existing contact ${contactId} on retry`,
+              error: patchRetry.errorText || `Failed to update existing contact on retry (HTTP ${patchRetry.status})`,
             };
           }
         } else {
+          console.error('[SYSTEME CRM ERROR] Stopped at contact creation (POST failed and contact not found)', {
+            operation: 'CREATE_CONTACT_HALTED',
+            status: createRes.status,
+            error: createRes.errorText,
+          });
           return {
             attempted: true,
             synced: false,
@@ -545,6 +607,9 @@ export async function syncLeadToSysteme(params: {
     }
 
     if (!contactId) {
+      console.error('[SYSTEME CRM ERROR] Stopped: contactId could not be resolved', {
+        operation: 'RESOLVE_CONTACT_ID_HALTED',
+      });
       return {
         attempted: true,
         synced: false,
@@ -559,7 +624,14 @@ export async function syncLeadToSysteme(params: {
     const sourceTagId = tagMap.get(MANAGED_TAGS.SOURCE);
     if (sourceTagId != null) {
       const ok = await assignTagToContact(apiKey, contactId, sourceTagId);
-      if (ok) appliedTags.push(MANAGED_TAGS.SOURCE);
+      if (ok) {
+        appliedTags.push(MANAGED_TAGS.SOURCE);
+      } else {
+        console.error('[SYSTEME CRM ERROR] Failed contact tag assignment', {
+          operation: 'ASSIGN_SOURCE_TAG',
+          tagName: MANAGED_TAGS.SOURCE,
+        });
+      }
     }
 
     // Tag 2: Add MARKETING_ELIGIBLE only if marketingConsent is true.
@@ -568,7 +640,14 @@ export async function syncLeadToSysteme(params: {
       const mktTagId = tagMap.get(MANAGED_TAGS.MARKETING_ELIGIBLE);
       if (mktTagId != null) {
         const ok = await assignTagToContact(apiKey, contactId, mktTagId);
-        if (ok) appliedTags.push(MANAGED_TAGS.MARKETING_ELIGIBLE);
+        if (ok) {
+          appliedTags.push(MANAGED_TAGS.MARKETING_ELIGIBLE);
+        } else {
+          console.error('[SYSTEME CRM ERROR] Failed contact tag assignment', {
+            operation: 'ASSIGN_MARKETING_TAG',
+            tagName: MANAGED_TAGS.MARKETING_ELIGIBLE,
+          });
+        }
       }
     }
 

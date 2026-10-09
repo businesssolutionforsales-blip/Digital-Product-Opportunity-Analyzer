@@ -79,14 +79,13 @@ export async function handleLeads(req: any, res: any) {
     const authoritativeReport = recomputeAuthoritativeDiagnosis(answers);
 
     console.log('[LEAD SUBMISSION RECEIVED]', {
-      email: normalizedEmail,
-      name: rawFirstName,
       businessType: safeBusinessType,
       marketing_consent: marketingConsent,
       authoritativeScore: authoritativeReport.opportunityScore,
       authoritativeBand: authoritativeReport.opportunityBand.labelAr,
       authoritativeStage: authoritativeReport.validationMaturity?.stageNumber ?? 0,
       authoritativeFormat: authoritativeReport.formatRecommendation?.primary?.titleAr,
+      hasAnswers: Boolean(leadData.answers),
       time: new Date().toISOString(),
     });
 

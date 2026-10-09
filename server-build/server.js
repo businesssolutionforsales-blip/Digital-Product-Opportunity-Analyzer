@@ -3,6 +3,9 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
+import dotenv2 from "dotenv";
+
+// src/server/apiHandlers.ts
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 
@@ -2652,139 +2655,167 @@ async function syncLeadToSysteme(params) {
   }
 }
 
-// server.ts
+// src/server/apiHandlers.ts
 dotenv.config();
-var __filename = fileURLToPath(import.meta.url);
-var __dirname = path.dirname(__filename);
-async function startServer() {
-  const app = express();
-  const portArgIndex = process.argv.findIndex((arg) => arg === "--port" || arg === "-p");
-  const portFromArg = portArgIndex !== -1 ? Number(process.argv[portArgIndex + 1]) : NaN;
-  const PORT = !isNaN(portFromArg) ? portFromArg : Number(process.env.PORT) || 3e3;
-  const isProd = process.env.NODE_ENV === "production";
-  app.use(express.json({ limit: "10mb" }));
-  app.get("/api/health", (_req, res) => {
-    const crmSecretConfigured = Boolean(
-      process.env.SYSTEME_IO_API_KEY && process.env.SYSTEME_IO_API_KEY.trim()
+function setCorsHeaders(res) {
+  if (res && typeof res.setHeader === "function") {
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,PATCH,DELETE,POST,PUT");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
     );
-    const geminiSecretConfigured = Boolean(
-      process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim()
-    );
-    return res.status(200).json({
-      ok: true,
-      server: "dpoa",
-      crmSecretConfigured,
-      geminiSecretConfigured
-    });
-  });
-  app.post("/api/leads", async (req, res) => {
+  }
+}
+function parseBody(req) {
+  if (!req.body) return {};
+  if (typeof req.body === "string") {
     try {
-      const leadData = req.body || {};
-      const rawEmail = String(leadData.email || "");
-      const normalizedEmail = rawEmail.trim().toLowerCase();
-      const rawFirstName = String(leadData.first_name || "").trim();
-      const safeBusinessType = sanitizeBusinessType(String(leadData.business_type || ""));
-      const marketingConsent = leadData.marketing_consent === true || leadData.consent_given === true;
-      if (!normalizedEmail) {
-        return res.status(400).json({ success: false, error: "Email is required" });
-      }
-      const answers = leadData.answers || {};
-      const authoritativeReport = recomputeAuthoritativeDiagnosis(answers);
-      console.log("[LEAD SUBMISSION RECEIVED]", {
+      return JSON.parse(req.body);
+    } catch {
+      return {};
+    }
+  }
+  return req.body;
+}
+async function handleHealth(req, res) {
+  setCorsHeaders(res);
+  if (req.method === "OPTIONS") {
+    return typeof res.end === "function" ? res.status(200).end() : res.status(200).json({});
+  }
+  if (req.method && req.method !== "GET" && req.method !== "HEAD") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+  return res.status(200).json({
+    ok: true,
+    server: "dpoa",
+    crmSecretConfigured: Boolean(process.env.SYSTEME_IO_API_KEY),
+    geminiSecretConfigured: Boolean(process.env.GEMINI_API_KEY)
+  });
+}
+async function handleLeads(req, res) {
+  setCorsHeaders(res);
+  if (req.method === "OPTIONS") {
+    return typeof res.end === "function" ? res.status(200).end() : res.status(200).json({});
+  }
+  if (req.method && req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+  try {
+    const leadData = parseBody(req);
+    const rawEmail = String(leadData.email || "");
+    const normalizedEmail = rawEmail.trim().toLowerCase();
+    const rawFirstName = String(leadData.first_name || "").trim();
+    const safeBusinessType = sanitizeBusinessType(String(leadData.business_type || ""));
+    const marketingConsent = leadData.marketing_consent === true || leadData.consent_given === true;
+    if (!normalizedEmail) {
+      return res.status(400).json({ success: false, error: "Email is required" });
+    }
+    const answers = leadData.answers || {};
+    const authoritativeReport = recomputeAuthoritativeDiagnosis(answers);
+    console.log("[LEAD SUBMISSION RECEIVED]", {
+      email: normalizedEmail,
+      name: rawFirstName,
+      businessType: safeBusinessType,
+      marketing_consent: marketingConsent,
+      authoritativeScore: authoritativeReport.opportunityScore,
+      authoritativeBand: authoritativeReport.opportunityBand.labelAr,
+      authoritativeStage: authoritativeReport.validationMaturity?.stageNumber ?? 0,
+      authoritativeFormat: authoritativeReport.formatRecommendation?.primary?.titleAr,
+      time: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    let crmStatus = { attempted: false, synced: false };
+    try {
+      crmStatus = await syncLeadToSysteme({
         email: normalizedEmail,
-        name: rawFirstName,
+        firstName: rawFirstName,
         businessType: safeBusinessType,
-        marketing_consent: marketingConsent,
-        authoritativeScore: authoritativeReport.opportunityScore,
-        authoritativeBand: authoritativeReport.opportunityBand.labelAr,
-        authoritativeStage: authoritativeReport.validationMaturity?.stageNumber ?? 0,
-        authoritativeFormat: authoritativeReport.formatRecommendation?.primary?.titleAr,
-        time: (/* @__PURE__ */ new Date()).toISOString()
+        marketingConsent,
+        authoritativeReport
       });
-      let crmStatus = { attempted: false, synced: false };
+    } catch (crmErr) {
+      const msg = crmErr instanceof Error ? crmErr.message : "Systeme sync unexpected error";
+      console.error("[SYSTEME CRM UNEXPECTED ERROR]", msg);
+      crmStatus = {
+        attempted: true,
+        synced: false,
+        error: "CRM sync failed gracefully without blocking user"
+      };
+    }
+    const webhookUrl = process.env.LEAD_WEBHOOK_URL;
+    let webhookDelivered = false;
+    let webhookError = null;
+    if (webhookUrl && webhookUrl.startsWith("http")) {
       try {
-        crmStatus = await syncLeadToSysteme({
-          email: normalizedEmail,
-          firstName: rawFirstName,
-          businessType: safeBusinessType,
-          marketingConsent,
-          authoritativeReport
+        const resp = await fetch(webhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...leadData,
+            email: normalizedEmail,
+            opportunity_score: authoritativeReport.opportunityScore,
+            opportunity_band: authoritativeReport.opportunityBand.labelAr,
+            confidence_score: authoritativeReport.confidenceScore,
+            validation_stage: authoritativeReport.validationMaturity?.stageNumber ?? 0
+          })
         });
-      } catch (crmErr) {
-        const msg = crmErr instanceof Error ? crmErr.message : "Systeme sync unexpected error";
-        console.error("[SYSTEME CRM UNEXPECTED ERROR]", msg);
-        crmStatus = {
-          attempted: true,
-          synced: false,
-          error: "CRM sync failed gracefully without blocking user"
-        };
-      }
-      const webhookUrl = process.env.LEAD_WEBHOOK_URL;
-      let webhookDelivered = false;
-      let webhookError = null;
-      if (webhookUrl && webhookUrl.startsWith("http")) {
-        try {
-          const resp = await fetch(webhookUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              ...leadData,
-              email: normalizedEmail,
-              opportunity_score: authoritativeReport.opportunityScore,
-              opportunity_band: authoritativeReport.opportunityBand.labelAr,
-              confidence_score: authoritativeReport.confidenceScore,
-              validation_stage: authoritativeReport.validationMaturity?.stageNumber ?? 0
-            })
-          });
-          webhookDelivered = resp.ok;
-          if (!resp.ok) {
-            webhookError = `HTTP ${resp.status}: ${resp.statusText}`;
-          }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : "Unknown error";
-          console.error("[LEGACY WEBHOOK ERROR]", message);
-          webhookError = message;
+        webhookDelivered = resp.ok;
+        if (!resp.ok) {
+          webhookError = `HTTP ${resp.status}: ${resp.statusText}`;
         }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        console.error("[LEGACY WEBHOOK ERROR]", message);
+        webhookError = message;
       }
+    }
+    return res.status(200).json({
+      success: true,
+      message: "\u062A\u0645 \u062D\u0641\u0638 \u0628\u064A\u0627\u0646\u0627\u062A\u0643 \u0648\u0641\u062A\u062D \u0627\u0644\u062A\u0642\u0631\u064A\u0631 \u0628\u0646\u062C\u0627\u062D",
+      crm: {
+        attempted: crmStatus.attempted,
+        synced: crmStatus.synced,
+        isExisting: crmStatus.isExisting,
+        tagsApplied: crmStatus.tagsApplied,
+        fieldsUpdated: crmStatus.fieldsUpdated
+      },
+      webhookDelivered,
+      webhookConfigured: Boolean(webhookUrl && webhookUrl.startsWith("http")),
+      webhookError
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[LEAD ROUTE ERROR]", message);
+    return res.status(200).json({
+      success: true,
+      message: "\u062A\u0645 \u0641\u062A\u062D \u0627\u0644\u062A\u0642\u0631\u064A\u0631 \u0628\u0646\u062C\u0627\u062D",
+      crm: { attempted: false, synced: false, error: "Internal processing handled gracefully" }
+    });
+  }
+}
+async function handleAnalyzeAi(req, res) {
+  setCorsHeaders(res);
+  if (req.method === "OPTIONS") {
+    return typeof res.end === "function" ? res.status(200).end() : res.status(200).json({});
+  }
+  if (req.method && req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
       return res.status(200).json({
-        success: true,
-        message: "\u062A\u0645 \u062D\u0641\u0638 \u0628\u064A\u0627\u0646\u0627\u062A\u0643 \u0648\u0641\u062A\u062D \u0627\u0644\u062A\u0642\u0631\u064A\u0631 \u0628\u0646\u062C\u0627\u062D",
-        crm: {
-          attempted: crmStatus.attempted,
-          synced: crmStatus.synced,
-          isExisting: crmStatus.isExisting,
-          tagsApplied: crmStatus.tagsApplied,
-          fieldsUpdated: crmStatus.fieldsUpdated
-          // Never return secret keys or sensitive tokens
-        },
-        webhookDelivered,
-        webhookConfigured: Boolean(webhookUrl && webhookUrl.startsWith("http")),
-        webhookError
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      console.error("[LEAD ROUTE ERROR]", err);
-      return res.status(200).json({
-        success: true,
-        message: "\u062A\u0645 \u0641\u062A\u062D \u0627\u0644\u062A\u0642\u0631\u064A\u0631 \u0628\u0646\u062C\u0627\u062D",
-        crm: { attempted: false, synced: false, error: "Internal processing handled gracefully" }
+        available: false,
+        message: "GEMINI_API_KEY is not set"
       });
     }
-  });
-  app.post("/api/analyze-ai", async (req, res) => {
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        return res.status(200).json({
-          available: false,
-          message: "GEMINI_API_KEY is not set"
-        });
-      }
-      const { structuredContext } = req.body;
-      if (!structuredContext) {
-        return res.status(400).json({ error: "structuredContext is required" });
-      }
-      const prompt = `
+    const body = parseBody(req);
+    const { structuredContext } = body;
+    if (!structuredContext) {
+      return res.status(400).json({ error: "structuredContext is required" });
+    }
+    const prompt = `
 \u0623\u0646\u062A \u0645\u0633\u062A\u0634\u0627\u0631 \u0627\u0633\u062A\u0631\u0627\u062A\u064A\u062C\u064A \u0631\u0641\u064A\u0639 \u0627\u0644\u0645\u0633\u062A\u0648\u0649 \u0641\u064A \u0647\u0646\u062F\u0633\u0629 \u0627\u0644\u0645\u0646\u062A\u062C\u0627\u062A \u0627\u0644\u0631\u0642\u0645\u064A\u0629 \u0648\u0645\u0633\u0627\u0631\u0627\u062A \u0627\u0644\u0628\u064A\u0639 \u0644\u0635\u0646\u0627\u0639 \u0627\u0644\u0645\u062D\u062A\u0648\u0649 \u0648\u0627\u0644\u062E\u0628\u0631\u0627\u0621\u060C \u0645\u0644\u062A\u0632\u0645 \u0628\u062F\u0642\u0629 \u0627\u0644\u062A\u062D\u0644\u064A\u0644 \u0627\u0644\u0627\u0633\u062A\u0634\u0627\u0631\u064A \u0648\u0641\u0642 \u0645\u062F\u0631\u0633\u0629 Mohamed Adel \u2014 Sales Funnel Architect.
 \u0645\u0647\u0645\u062A\u0643: \u062A\u0642\u062F\u064A\u0645 \u0642\u0631\u0627\u0621\u0629 \u0646\u0642\u062F\u064A\u0629 \u0627\u0633\u062A\u0631\u0627\u062A\u064A\u062C\u064A\u0629 \u0645\u0628\u0646\u064A\u0629 \u0628\u062F\u0642\u0629 \u0648\u062D\u0635\u0631 \u0639\u0644\u0649 \u0627\u0644\u0648\u0642\u0627\u0626\u0639 \u0648\u0627\u0644\u0623\u062F\u0644\u0629 \u0627\u0644\u062A\u064A \u0642\u062F\u0645\u0647\u0627 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u060C \u062F\u0648\u0646 \u0627\u062E\u062A\u0644\u0627\u0642 \u0648\u0642\u0627\u0626\u0639 \u0623\u0648 \u062A\u0641\u0627\u0624\u0644 \u0645\u0641\u0631\u0637 \u0623\u0648 \u0645\u0635\u0637\u0644\u062D\u0627\u062A \u062A\u062D\u0641\u064A\u0632\u064A\u0629 \u062C\u0648\u0641\u0627\u0621.
 
@@ -2810,48 +2841,56 @@ ${JSON.stringify(structuredContext, null, 2)}
   "next_best_question": "\u0627\u0644\u0633\u0624\u0627\u0644 \u0627\u0644\u0627\u0633\u062A\u0631\u0627\u062A\u064A\u062C\u064A \u0627\u0644\u0623\u0643\u062B\u0631 \u0625\u0644\u062D\u0627\u062D\u0627\u064B \u0627\u0644\u0630\u064A \u064A\u062C\u0628 \u0623\u0646 \u064A\u0648\u062C\u0647\u0647 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u0644\u0646\u0641\u0633\u0647 \u0647\u0630\u0627 \u0627\u0644\u0645\u0633\u0627\u0621"
 }
 `;
-      const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json"
-        }
-      });
-      const responseText = response.text || "";
-      try {
-        const parsed = JSON.parse(responseText);
-        return res.status(200).json({
-          available: true,
-          interpretation: parsed
-        });
-      } catch (parseErr) {
-        console.warn("[AI JSON PARSE WARNING]", responseText);
-        return res.status(200).json({
-          available: false,
-          message: "Invalid JSON returned from AI"
-        });
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateContent({
+      model: "gemini-3.8-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json"
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      console.error("[AI ANALYZE ERROR]", err);
+    });
+    const responseText = response.text || "";
+    try {
+      const parsed = JSON.parse(responseText);
+      return res.status(200).json({
+        available: true,
+        interpretation: parsed
+      });
+    } catch (parseErr) {
+      console.warn("[AI JSON PARSE WARNING]", responseText);
       return res.status(200).json({
         available: false,
-        error: message
+        message: "Invalid JSON returned from AI"
       });
     }
-  });
-  app.post("/api/discover-ideas", async (req, res) => {
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        return res.status(200).json({ available: false });
-      }
-      const { discoveryInput } = req.body;
-      if (!discoveryInput) {
-        return res.status(400).json({ error: "discoveryInput is required" });
-      }
-      const prompt = `
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[AI ANALYZE ERROR]", err);
+    return res.status(200).json({
+      available: false,
+      error: message
+    });
+  }
+}
+async function handleDiscoverIdeas(req, res) {
+  setCorsHeaders(res);
+  if (req.method === "OPTIONS") {
+    return typeof res.end === "function" ? res.status(200).end() : res.status(200).json({});
+  }
+  if (req.method && req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(200).json({ available: false });
+    }
+    const body = parseBody(req);
+    const { discoveryInput } = body;
+    if (!discoveryInput) {
+      return res.status(400).json({ error: "discoveryInput is required" });
+    }
+    const prompt = `
 \u0628\u0635\u0641\u062A\u0643 \u0645\u0633\u062A\u0634\u0627\u0631 \u0627\u0633\u062A\u0631\u0627\u062A\u064A\u062C\u064A \u0644\u0640 Mohamed Adel \u2014 Sales Funnel Architect\u060C \u062D\u0644\u0644 \u0628\u064A\u0627\u0646\u0627\u062A \u0647\u0630\u0627 \u0627\u0644\u062E\u0628\u064A\u0631 \u0648\u0627\u0633\u062A\u062E\u0631\u062C \u0644\u0647 3 \u0641\u0631\u0635 \u0645\u0646\u062A\u062C\u0627\u062A \u0631\u0642\u0645\u064A\u0629 \u0645\u0631\u0634\u062D\u0629\u060C \u0645\u062E\u062A\u0644\u0641\u0629 \u062C\u0648\u0647\u0631\u064A\u0627\u064B \u0641\u064A \u0632\u0627\u0648\u064A\u0629 \u0627\u0644\u0645\u0634\u0643\u0644\u0629 \u0648\u0627\u0644\u0634\u0643\u0644\u060C \u0648\u0644\u064A\u0633\u062A \u0645\u062C\u0631\u062F \u062A\u0643\u0631\u0627\u0631 \u0644\u0646\u0641\u0633 \u0627\u0644\u0641\u0643\u0631\u0629 \u0641\u064A \u0642\u0648\u0627\u0644\u0628 \u062C\u0627\u0647\u0632\u0629:
 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A:
 ${JSON.stringify(discoveryInput, null, 2)}
@@ -2878,36 +2917,52 @@ ${JSON.stringify(discoveryInput, null, 2)}
   }
 ]
 `;
-      const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json"
-        }
-      });
-      const responseText = response.text || "";
-      try {
-        const candidates = JSON.parse(responseText);
-        if (Array.isArray(candidates) && candidates.length > 0) {
-          const candidatesWithSource = candidates.map((c) => ({
-            ...c,
-            source: "ai_generated"
-          }));
-          return res.status(200).json({
-            available: true,
-            candidates: candidatesWithSource
-          });
-        }
-      } catch (e) {
-        console.warn("[AI DISCOVER PARSE FAILED]", responseText);
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateContent({
+      model: "gemini-3.8-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json"
       }
-      return res.status(200).json({ available: false });
-    } catch (err) {
-      console.error("[AI DISCOVER ERROR]", err);
-      return res.status(200).json({ available: false });
+    });
+    const responseText = response.text || "";
+    try {
+      const candidates = JSON.parse(responseText);
+      if (Array.isArray(candidates) && candidates.length > 0) {
+        const candidatesWithSource = candidates.map((c) => ({
+          ...c,
+          source: "ai_generated"
+        }));
+        return res.status(200).json({
+          available: true,
+          candidates: candidatesWithSource
+        });
+      }
+    } catch (e) {
+      console.warn("[AI DISCOVER PARSE FAILED]", responseText);
     }
-  });
+    return res.status(200).json({ available: false });
+  } catch (err) {
+    console.error("[AI DISCOVER ERROR]", err);
+    return res.status(200).json({ available: false });
+  }
+}
+
+// server.ts
+dotenv2.config();
+var __filename = fileURLToPath(import.meta.url);
+var __dirname = path.dirname(__filename);
+async function startServer() {
+  const app = express();
+  const portArgIndex = process.argv.findIndex((arg) => arg === "--port" || arg === "-p");
+  const portFromArg = portArgIndex !== -1 ? Number(process.argv[portArgIndex + 1]) : NaN;
+  const PORT = !isNaN(portFromArg) ? portFromArg : Number(process.env.PORT) || 3e3;
+  const isProd = process.env.NODE_ENV === "production" || process.argv.includes("--prod");
+  app.use(express.json({ limit: "10mb" }));
+  app.all("/api/health", (req, res) => handleHealth(req, res));
+  app.all("/api/leads", (req, res) => handleLeads(req, res));
+  app.all("/api/analyze-ai", (req, res) => handleAnalyzeAi(req, res));
+  app.all("/api/discover-ideas", (req, res) => handleDiscoverIdeas(req, res));
   if (!isProd) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -2915,9 +2970,10 @@ ${JSON.stringify(discoveryInput, null, 2)}
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(__dirname, "dist")));
+    const frontendDist = path.resolve(process.cwd(), "dist");
+    app.use(express.static(frontendDist));
     app.get("*", (_req, res) => {
-      res.sendFile(path.resolve(__dirname, "dist", "index.html"));
+      res.sendFile(path.resolve(frontendDist, "index.html"));
     });
   }
   app.listen(PORT, "0.0.0.0", () => {

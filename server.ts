@@ -16,24 +16,17 @@ async function startServer() {
   const portArgIndex = process.argv.findIndex((arg) => arg === '--port' || arg === '-p');
   const portFromArg = portArgIndex !== -1 ? Number(process.argv[portArgIndex + 1]) : NaN;
   const PORT = !isNaN(portFromArg) ? portFromArg : (Number(process.env.PORT) || 3000);
-  const isProd = process.env.NODE_ENV === 'production';
+  const isProd = process.env.NODE_ENV === 'production' || process.argv.includes('--prod');
 
   app.use(express.json({ limit: '10mb' }));
 
   // API Route: Health Check
   app.get('/api/health', (_req, res) => {
-    const crmSecretConfigured = Boolean(
-      process.env.SYSTEME_IO_API_KEY && process.env.SYSTEME_IO_API_KEY.trim()
-    );
-    const geminiSecretConfigured = Boolean(
-      process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim()
-    );
-
     return res.status(200).json({
       ok: true,
       server: 'dpoa',
-      crmSecretConfigured,
-      geminiSecretConfigured,
+      crmSecretConfigured: Boolean(process.env.SYSTEME_IO_API_KEY),
+      geminiSecretConfigured: Boolean(process.env.GEMINI_API_KEY),
     });
   });
 
@@ -305,9 +298,10 @@ ${JSON.stringify(discoveryInput, null, 2)}
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
+    const frontendDist = path.resolve(process.cwd(), 'dist');
+    app.use(express.static(frontendDist));
     app.get('*', (_req, res) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+      res.sendFile(path.resolve(frontendDist, 'index.html'));
     });
   }
 

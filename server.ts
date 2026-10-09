@@ -13,10 +13,29 @@ const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+  const portArgIndex = process.argv.findIndex((arg) => arg === '--port' || arg === '-p');
+  const portFromArg = portArgIndex !== -1 ? Number(process.argv[portArgIndex + 1]) : NaN;
+  const PORT = !isNaN(portFromArg) ? portFromArg : (Number(process.env.PORT) || 3000);
   const isProd = process.env.NODE_ENV === 'production';
 
   app.use(express.json({ limit: '10mb' }));
+
+  // API Route: Health Check
+  app.get('/api/health', (_req, res) => {
+    const crmSecretConfigured = Boolean(
+      process.env.SYSTEME_IO_API_KEY && process.env.SYSTEME_IO_API_KEY.trim()
+    );
+    const geminiSecretConfigured = Boolean(
+      process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim()
+    );
+
+    return res.status(200).json({
+      ok: true,
+      server: 'dpoa',
+      crmSecretConfigured,
+      geminiSecretConfigured,
+    });
+  });
 
   // API Route: Lead Capture & Systeme.io CRM Integration
   app.post('/api/leads', async (req, res) => {

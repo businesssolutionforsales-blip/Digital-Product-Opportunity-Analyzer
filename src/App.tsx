@@ -79,6 +79,13 @@ export default function App() {
   const aiInterpretationCacheRef = React.useRef<Map<string, AiStrategicInterpretation>>(new Map());
   const recalculateSequenceRef = React.useRef<number>(0);
   const latestTargetFingerprintRef = React.useRef<string>('');
+  const latestTargetReportIdRef = React.useRef<string>('');
+
+  const invalidatePendingAiRequests = () => {
+    recalculateSequenceRef.current++;
+    latestTargetFingerprintRef.current = '';
+    latestTargetReportIdRef.current = '';
+  };
 
   // Autosave resume prompt (Requirement #15)
   const [pendingResumeDraft, setPendingResumeDraft] = useState<AutosaveDraft | null>(null);
@@ -130,6 +137,7 @@ export default function App() {
 
   // 1. Start from Landing
   const handleStart = () => {
+    invalidatePendingAiRequests();
     setStep('path_select');
     trackEvent('tool_started', { action: 'start_clicked' });
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -218,6 +226,7 @@ export default function App() {
 
   // 4. Submit Questionnaire -> Real Multi-Stage Analysis (Requirement #3, #4, #5)
   const handleQuestionnaireSubmit = async (answers: QuestionnaireAnswers) => {
+    invalidatePendingAiRequests();
     setQuestionnaireDraft(answers);
     setStep('analyzing');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -292,9 +301,18 @@ export default function App() {
 
     setQuestionnaireDraft(updatedAnswers);
     const newFingerprint = computeAiInputFingerprint(updatedAnswers);
+    const targetReportId = activeReport.id;
+
+    // STEP 1: ALWAYS invalidate any outstanding in-flight AI requests FIRST on EVERY answer-update event!
+    // This increments sequenceId BEFORE checking cache or returning early, ensuring older pending
+    // requests can NEVER overwrite the newly selected report state even if this update is a cache hit.
+    const sequenceId = ++recalculateSequenceRef.current;
+    latestTargetFingerprintRef.current = newFingerprint;
+    latestTargetReportIdRef.current = targetReportId;
+
     const prevFingerprint = activeReport.aiFingerprint;
 
-    // 1. If AI-relevant inputs haven't changed and existing AI is valid, keep it
+    // STEP 2: If AI-relevant inputs haven't changed and existing AI is valid, keep it
     if (
       prevFingerprint &&
       prevFingerprint === newFingerprint &&
@@ -302,41 +320,50 @@ export default function App() {
       isValidAiInterpretation(activeReport.aiInterpretation)
     ) {
       const retainedReport = analyzeOpportunity(updatedAnswers, activeReport.aiInterpretation, {
-        reportId: activeReport.id,
+        reportId: targetReportId,
         createdAt: activeReport.createdAt,
         aiFingerprint: newFingerprint,
+        isAiRecalculating: false,
       });
       setActiveReport(retainedReport);
       return;
     }
 
-    // 2. If we have a cached AI interpretation that exactly matches this new input fingerprint, reuse it safely
+    // STEP 3: If we have a cached AI interpretation that exactly matches this new input fingerprint, reuse it safely
     const cachedMatchingAi = aiInterpretationCacheRef.current.get(newFingerprint);
     if (cachedMatchingAi && isValidAiInterpretation(cachedMatchingAi)) {
       const cachedReport = analyzeOpportunity(updatedAnswers, cachedMatchingAi, {
-        reportId: activeReport.id,
+        reportId: targetReportId,
         createdAt: activeReport.createdAt,
         aiFingerprint: newFingerprint,
+        isAiRecalculating: false,
       });
       setActiveReport(cachedReport);
       return;
     }
 
-    // 3. Stale AI Invalidation:
-    // When inputs change, immediately invalidate previous AI interpretation and display
-    // authoritative deterministic report with zero delay.
+    // STEP 4: Stale AI Invalidation:
+    // When inputs change and no matching cache exists, immediately invalidate previous AI interpretation
+    // and display authoritative deterministic report with zero delay.
     const immediateDeterministicReport = analyzeOpportunity(updatedAnswers, null, {
-      reportId: activeReport.id,
+      reportId: targetReportId,
       createdAt: activeReport.createdAt,
       isAiRecalculating: true,
     });
     setActiveReport(immediateDeterministicReport);
 
-    // 4. Race-condition protection: increment sequence ID and record target fingerprint
-    const sequenceId = ++recalculateSequenceRef.current;
-    latestTargetFingerprintRef.current = newFingerprint;
+    // Guard helper: validate current report identity, latest sequence, latest fingerprint, and input consistency
+    const isRequestStillCurrent = (prev: StrategicReport | null): boolean => {
+      if (!prev) return false;
+      if (prev.id !== targetReportId) return false;
+      if (recalculateSequenceRef.current !== sequenceId) return false;
+      if (latestTargetFingerprintRef.current !== newFingerprint) return false;
+      if (latestTargetReportIdRef.current !== targetReportId) return false;
+      if (computeAiInputFingerprint(prev.answers) !== newFingerprint) return false;
+      return true;
+    };
 
-    // 5. Request fresh AI interpretation asynchronously in background
+    // STEP 5: Request fresh AI interpretation asynchronously in background
     (async () => {
       try {
         const freshAiInterpretation = await queryStructuredAiInterpretation(
@@ -344,29 +371,30 @@ export default function App() {
           updatedAnswers
         );
 
-        // Discard stale or mismatched responses (race-condition protection)
-        if (recalculateSequenceRef.current !== sequenceId) {
-          return;
-        }
-        if (latestTargetFingerprintRef.current !== newFingerprint) {
-          return;
+        // Pre-mutation guard check: discard if superseded
+        if (
+          recalculateSequenceRef.current !== sequenceId ||
+          latestTargetFingerprintRef.current !== newFingerprint ||
+          latestTargetReportIdRef.current !== targetReportId
+        ) {
+          return; // Discard stale/superseded response
         }
 
         if (freshAiInterpretation && isValidAiInterpretation(freshAiInterpretation)) {
           aiInterpretationCacheRef.current.set(newFingerprint, freshAiInterpretation);
 
           setActiveReport((prev) => {
-            if (!prev || prev.id !== activeReport.id) return prev;
+            if (!isRequestStillCurrent(prev)) return prev;
             return analyzeOpportunity(updatedAnswers, freshAiInterpretation, {
-              reportId: activeReport.id,
-              createdAt: activeReport.createdAt,
+              reportId: targetReportId,
+              createdAt: prev.createdAt,
               aiFingerprint: newFingerprint,
               isAiRecalculating: false,
             });
           });
         } else {
           setActiveReport((prev) => {
-            if (!prev || prev.id !== activeReport.id) return prev;
+            if (!isRequestStillCurrent(prev)) return prev;
             return {
               ...prev,
               isAiRecalculating: false,
@@ -378,7 +406,7 @@ export default function App() {
         }
       } catch (err) {
         setActiveReport((prev) => {
-          if (!prev || prev.id !== activeReport.id) return prev;
+          if (!isRequestStillCurrent(prev)) return prev;
           return {
             ...prev,
             isAiRecalculating: false,
@@ -394,6 +422,7 @@ export default function App() {
   // Reset to landing
   const handleReset = () => {
     if (window.confirm('هل تريد بدء تحليل جديد ومسح البيانات الحالية؟')) {
+      invalidatePendingAiRequests();
       setActiveReport(null);
       setSelectedPath(null);
       setQuestionnaireDraft({});

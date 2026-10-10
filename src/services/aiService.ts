@@ -36,39 +36,96 @@ export function isValidAiInterpretation(
   });
 }
 
+export const FINGERPRINT_SCHEMA_VERSION = 'v2';
+
+function normStr(v: any): string {
+  if (v == null) return '';
+  return String(v).trim().toLowerCase();
+}
+
+function normArr(v: any): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map(normStr)
+    .filter((s) => s.length > 0)
+    .sort();
+}
+
+function normBoolOrString(v: any): string {
+  if (v === true || v === 'yes') return 'yes';
+  if (v === false || v === 'no') return 'no';
+  return normStr(v);
+}
+
 /**
  * Computes a deterministic canonical fingerprint for questionnaire answers.
- * Used to ensure that AI interpretations are strictly tied to the exact input state
- * and never displayed for mismatched or modified diagnostic data.
+ * Covers all questionnaire fields capable of affecting Gemini interpretation context,
+ * deterministic scoring formulas, validation maturity stages, and format recommendations.
+ * Uses strict key ordering and stable normalization with schema versioning.
  */
 export function computeAiInputFingerprint(answers: QuestionnaireAnswers): string {
-  const norm = {
-    domain: (answers.expertiseDomain || '').trim().toLowerCase(),
-    years: (answers.yearsOfExperience || '').trim(),
-    buyer: (answers.targetBuyerDescription || '').trim().toLowerCase(),
-    buyer_spec: answers.isBuyerBroadOrSpecific || '',
-    problem: (answers.coreProblemDescription || '').trim().toLowerCase(),
-    freq: answers.problemFrequency || '',
-    cost: Array.isArray(answers.costOfInaction)
-      ? [...answers.costOfInaction].sort().join(',')
-      : String(answers.costOfInaction || '').trim().toLowerCase(),
-    alternatives: (answers.currentAlternativesAndWorkarounds || '').trim().toLowerCase(),
-    demand_evidence: [...(answers.demandEvidenceList || [])].sort().join(','),
-    evidence_notes: (answers.evidenceNotes || '').trim().toLowerCase(),
-    before: (answers.beforeState || '').trim().toLowerCase(),
-    after: (answers.afterState || '').trim().toLowerCase(),
-    method: (answers.uniqueMethodOrProcess || '').trim().toLowerCase(),
-    method_type: answers.uniqueMethodType || '',
-    creator_time: answers.creatorTimePerCustomer || '',
-    requires_feedback: Boolean(answers.requiresPersonalFeedback),
-    price_tier: answers.expectedPriceTier || '',
-    paying_clients: Boolean(answers.hasExistingPayingClients),
-    access_level: answers.audienceAccessLevel || '',
-    feedback_state: answers.personalFeedbackState || '',
-    one_on_one: Boolean(answers.requiresOneOnOneAccountability),
-    delivery_mech: [...(answers.deliveryMechanism || [])].sort().join(','),
+  const canon = {
+    _schema: FINGERPRINT_SCHEMA_VERSION,
+    afterState: normStr(answers.afterState),
+    audienceAccessLevel: normStr(answers.audienceAccessLevel),
+    availableWeeklyHours: normStr(answers.availableWeeklyHours),
+    beforeState: normStr(answers.beforeState),
+    buyerCurrentBehavior: normStr(answers.buyerCurrentBehavior),
+    buyerStageAndSituation: normStr(answers.buyerStageAndSituation),
+    coreProblemDescription: normStr(answers.coreProblemDescription),
+    costOfInaction: normArr(answers.costOfInaction),
+    creatorMethodSummary: normStr(answers.creatorMethodSummary),
+    creatorTimePerCustomer: normStr(answers.creatorTimePerCustomer),
+    deliveryMechanism: normArr(answers.deliveryMechanism),
+    demandEvidenceList: normArr(answers.demandEvidenceList),
+    evidenceNotes: normStr(answers.evidenceNotes),
+    existingAudienceChannel: normStr(answers.existingAudienceChannel),
+    expectedPriceTier: normStr(answers.expectedPriceTier),
+    expertiseDomain: normStr(answers.expertiseDomain),
+    explicitRecurringRequestReceived: normBoolOrString(answers.explicitRecurringRequestReceived),
+    fieldProvenance: {
+      coreProblem: normStr(answers.fieldProvenance?.coreProblem),
+      demandEvidence: normStr(answers.fieldProvenance?.demandEvidence),
+      desiredTransformation: normStr(answers.fieldProvenance?.desiredTransformation),
+      productTitle: normStr(answers.fieldProvenance?.productTitle),
+      qualification: normStr(answers.fieldProvenance?.qualification),
+      targetBuyer: normStr(answers.fieldProvenance?.targetBuyer),
+      uniqueMethod: normStr(answers.fieldProvenance?.uniqueMethod),
+    },
+    hasConfirmedHypotheses: Boolean(answers.hasConfirmedHypotheses),
+    hasDeliveredSolutionMultipleTimes: normBoolOrString(answers.hasDeliveredSolutionMultipleTimes),
+    hasDeliveryCapacityAndClearBottlenecks: normBoolOrString(answers.hasDeliveryCapacityAndClearBottlenecks),
+    hasDocumentedRetentionData: normBoolOrString(answers.hasDocumentedRetentionData),
+    hasExistingPayingClients: answers.hasExistingPayingClients == null ? 'null' : Boolean(answers.hasExistingPayingClients) ? 'yes' : 'no',
+    hasMeasuredConversionRate: normBoolOrString(answers.hasMeasuredConversionRate),
+    hasRecurringPaymentBehavior: normStr(answers.hasRecurringPaymentBehavior),
+    hasRepeatProductSales: normBoolOrString(answers.hasRepeatProductSales),
+    hasRepeatableAcquisitionChannel: normBoolOrString(answers.hasRepeatableAcquisitionChannel),
+    hasRepeatableDeliveryProcess: normBoolOrString(answers.hasRepeatableDeliveryProcess),
+    hasStableLeadFlow: normBoolOrString(answers.hasStableLeadFlow),
+    isBuyerBroadOrSpecific: normStr(answers.isBuyerBroadOrSpecific),
+    knowsActualDeliveryBurden: normBoolOrString(answers.knowsActualDeliveryBurden),
+    oneOnOneAccountabilityState: normStr(answers.oneOnOneAccountabilityState),
+    personalFeedbackState: normStr(answers.personalFeedbackState),
+    problemFrequency: normStr(answers.problemFrequency),
+    problemsFrequentlySolved: normStr(answers.problemsFrequentlySolved),
+    productNameOrWorkingTitle: normStr(answers.productNameOrWorkingTitle),
+    productRoleInBusiness: normStr(answers.productRoleInBusiness),
+    qualificationEvidence: normArr(answers.qualificationEvidence),
+    recurringBuyerCountApprox: normStr(answers.recurringBuyerCountApprox),
+    recurringValueReason: normStr(answers.recurringValueReason),
+    repeatedQuestions: normStr(answers.repeatedQuestions),
+    requiresOneOnOneAccountability: answers.requiresOneOnOneAccountability == null ? 'null' : Boolean(answers.requiresOneOnOneAccountability) ? 'yes' : 'no',
+    requiresPersonalFeedback: answers.requiresPersonalFeedback == null ? 'null' : Boolean(answers.requiresPersonalFeedback) ? 'yes' : 'no',
+    targetBuyerDescription: normStr(answers.targetBuyerDescription),
+    transformationRealism: normStr(answers.transformationRealism),
+    understandsStandardVsCustomDelivery: normBoolOrString(answers.understandsStandardVsCustomDelivery),
+    uniqueMethodOrProcess: normStr(answers.uniqueMethodOrProcess),
+    uniqueMethodType: normStr(answers.uniqueMethodType),
+    userPath: normStr(answers.userPath),
   };
-  return JSON.stringify(norm);
+
+  return JSON.stringify(canon);
 }
 
 export async function queryStructuredAiInterpretation(

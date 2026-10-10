@@ -34,6 +34,7 @@ import { InteractiveRecalculate } from './components/InteractiveRecalculate';
 import { LegalModals } from './components/LegalModals';
 import { BrandFooter } from './components/BrandFooter';
 import { HypothesisReviewStep } from './components/HypothesisReviewStep';
+import { AiStrategicInsight, isValidAiInterpretation } from './components/AiStrategicInsight';
 import { Sliders, ArrowLeft, RotateCcw, Share2, Printer, Sparkles, AlertCircle } from 'lucide-react';
 
 type AppStep =
@@ -447,6 +448,12 @@ export default function App() {
             {/* FULL STRATEGIC SECTIONS: STRICTLY HIDDEN UNTIL UNLOCKED (Requirement #6) */}
             {isCurrentReportUnlocked ? (
               <div className="space-y-8 pt-4">
+                {/* AI Strategic Insight (Rendered strictly when hybrid_ai mode and valid interpretation exist) */}
+                {activeReport.analysisMode === 'hybrid_ai' &&
+                  isValidAiInterpretation(activeReport.aiInterpretation) && (
+                    <AiStrategicInsight interpretation={activeReport.aiInterpretation} />
+                  )}
+
                 {/* 4. Assumption Matrix */}
                 <AssumptionMatrix assumptions={activeReport.assumptionMap} />
 

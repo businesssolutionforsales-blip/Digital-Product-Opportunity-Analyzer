@@ -1,6 +1,7 @@
 import React from 'react';
 import { StrategicReport } from '../types';
-import { Printer, ArrowRight, Check } from 'lucide-react';
+import { isValidAiInterpretation } from './AiStrategicInsight';
+import { Printer, ArrowRight, Check, Sparkles } from 'lucide-react';
 
 interface PrintableReportViewProps {
   report: StrategicReport;
@@ -120,6 +121,77 @@ export const PrintableReportView: React.FC<PrintableReportViewProps> = ({ report
             </div>
           </div>
         </section>
+
+        {/* AI Strategic Interpretation (Rendered only when hybrid_ai and valid) */}
+        {report.analysisMode === 'hybrid_ai' &&
+          isValidAiInterpretation(report.aiInterpretation) && (
+            <section className="mb-8 space-y-3 p-5 rounded-xl border border-[#D5D2C9] bg-[#F7F6F2]">
+              <div className="flex items-center justify-between border-b border-[#D5D2C9] pb-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[#A7690C]" />
+                  <h2 className="font-heading font-bold text-lg text-[#040405]">
+                    الرؤية الاستراتيجية التحليلية المعززة بذكاء Gemini
+                  </h2>
+                </div>
+                <span className="text-[10px] text-[#797979]">
+                  قراءة تفسيرية مبنية على البيانات دون المساس بالأوزان القطعية
+                </span>
+              </div>
+
+              <div className="space-y-3 text-xs">
+                <div className="p-3.5 bg-white rounded-lg border border-[#E5E5E0]">
+                  <span className="font-bold text-[#A7690C] block mb-1">
+                    التقييم الاستشاري لوضع الفكرة ونضجها:
+                  </span>
+                  <p className="text-[#040405] leading-relaxed font-medium">
+                    {report.aiInterpretation.strategic_interpretation}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="p-3 bg-white rounded-lg border border-[#E5E5E0]">
+                    <span className="font-bold text-[#A7690C] block mb-1">
+                      الفجوة في الأدلة السوقية (Evidence Gap):
+                    </span>
+                    <p className="text-[#333] leading-relaxed">
+                      {report.aiInterpretation.evidence_gap}
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-white rounded-lg border border-[#E5E5E0]">
+                    <span className="font-bold text-[#A7690C] block mb-1">
+                      تحذير استشاري خاص بحالتك (إياك أن تفعل):
+                    </span>
+                    <p className="text-[#333] leading-relaxed">
+                      {report.aiInterpretation.what_not_to_do}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-white rounded-lg border border-[#E5E5E0] space-y-1">
+                  <span className="font-bold text-[#A7690C] block">
+                    أقل اختبار ميداني سريع ومباشر للتحقق:
+                  </span>
+                  <p className="text-[#040405] font-semibold">
+                    {report.aiInterpretation.recommended_test}
+                  </p>
+                  <p className="text-[#555] text-[11px] border-t border-[#E5E5E0] pt-1 mt-1">
+                    <strong>السبب الاستراتيجي: </strong>
+                    {report.aiInterpretation.recommended_test_reason}
+                  </p>
+                </div>
+
+                <div className="p-3 bg-white rounded-lg border border-[#E5E5E0]">
+                  <span className="font-bold text-[#040405] block mb-0.5">
+                    السؤال الاستراتيجي الأهم لتطرحه على نفسك الليلة:
+                  </span>
+                  <p className="text-[#040405] font-bold">
+                    &ldquo;{report.aiInterpretation.next_best_question}&rdquo;
+                  </p>
+                </div>
+              </div>
+            </section>
+          )}
 
         {/* 3. Product Concept & Positioning */}
         <section className="mb-8 space-y-3">

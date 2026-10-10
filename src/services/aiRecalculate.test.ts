@@ -686,4 +686,174 @@ describe('AI Integrity and Interactive Recalculation', () => {
       expect(typeof report?.opportunityScore).toBe('number');
     });
   });
+
+  describe('4. Recommended Product Format & Recurring Revenue Evidence Integrity', () => {
+    it('Paying consulting clients with repeat purchases do NOT automatically get recommended Membership', () => {
+      const consultingAnswers: QuestionnaireAnswers = {
+        ...baseAnswers,
+        problemFrequency: 'daily',
+        hasExistingPayingClients: true,
+        hasRecurringPaymentBehavior: 'repeat_buyers_no_sub',
+        recurringBuyerCountApprox: 8,
+        explicitRecurringRequestReceived: false,
+        recurringValueReason: '', // No subscription renewal reason
+        creatorTimePerCustomer: 'high_touch',
+        requiresPersonalFeedback: true,
+        personalFeedbackState: 'required',
+        expectedPriceTier: 'premium_500_plus',
+        productRoleInBusiness: 'backend_service_feeder',
+      };
+
+      const report = analyzeOpportunity(consultingAnswers);
+
+      // Primary must NOT be Membership
+      expect(report.formatRecommendation.primary.titleEn).not.toBe('Membership');
+      // Should favor high-touch / productized consulting or cohort sprint
+      expect(['Productized Consulting', 'Cohort / Sprint', 'Live Workshop', 'Actionable Toolkit & Templates']).toContain(
+        report.formatRecommendation.primary.titleEn
+      );
+
+      // Membership must be in the Avoid list with educational reason
+      const avoidMembership = report.formatRecommendation.avoid.find((a) =>
+        a.titleEn.toLowerCase().includes('membership')
+      );
+      expect(avoidMembership).toBeDefined();
+
+      // WhatNotToDo must warn against confusing repeat consulting with subscriptions
+      const hasConsultingWarning = report.whatNotToDo.some(
+        (w) => w.headlineAr.includes('الاستشارات') || w.headlineAr.includes('اشتراك')
+      );
+      expect(hasConsultingWarning).toBe(true);
+
+      // Sprint mode must NOT be recurring validation sprint
+      expect(report.validationSprint.sprintMode).not.toBe('RECURRING_MODEL_VALIDATION_SPRINT');
+    });
+
+    it('Recurring problem without ongoing renewal mechanism does NOT get recommended Membership', () => {
+      const recurringProblemAnswers: QuestionnaireAnswers = {
+        ...baseAnswers,
+        problemFrequency: 'weekly',
+        hasRecurringPaymentBehavior: 'no',
+        explicitRecurringRequestReceived: false,
+        recurringValueReason: '', // Empty continuation mechanism
+        deliveryMechanism: ['framework_steps', 'templates_tools'],
+        creatorTimePerCustomer: 'under_30m',
+        audienceAccessLevel: 'direct_daily',
+      };
+
+      const report = analyzeOpportunity(recurringProblemAnswers);
+
+      // Primary must NOT be Membership
+      expect(report.formatRecommendation.primary.titleEn).not.toBe('Membership');
+      // Sprint mode must NOT be recurring
+      expect(report.validationSprint.sprintMode).not.toBe('RECURRING_MODEL_VALIDATION_SPRINT');
+    });
+
+    it('Explicit subscription demand + ongoing continuation value properly qualifies Membership', () => {
+      const membershipQualifiedAnswers: QuestionnaireAnswers = {
+        ...baseAnswers,
+        problemFrequency: 'weekly',
+        hasRecurringPaymentBehavior: 'recurring_monthly',
+        recurringBuyerCountApprox: 12,
+        explicitRecurringRequestReceived: true,
+        recurringValueReason: 'تحديثات شهرية مستمرة وجلسات متابعة دورية ومراجعة حالات جديدة للعملاء',
+        deliveryMechanism: ['community', 'live_coaching'],
+        creatorTimePerCustomer: 'recurring_support',
+        audienceAccessLevel: 'direct_daily',
+        productRoleInBusiness: 'core_flagship',
+      };
+
+      const report = analyzeOpportunity(membershipQualifiedAnswers);
+
+      // Must be Membership
+      expect(report.formatRecommendation.primary.titleEn).toBe('Membership');
+      expect(report.mvp.mvpTypeAr).toContain('اشتراك مؤسس تجريبي');
+      expect(report.sprintMode).toBe('RECURRING_MODEL_VALIDATION_SPRINT');
+
+      // Membership must NOT be in avoid list
+      const inAvoid = report.formatRecommendation.avoid.some((a) =>
+        a.titleEn.toLowerCase().includes('membership')
+      );
+      expect(inAvoid).toBe(false);
+
+      // WhatNotToDo must give member retention warnings rather than forbidding memberships
+      const hasFoundingMemberWarning = report.whatNotToDo.some((w) =>
+        w.headlineAr.includes('أعضاء مؤسسين')
+      );
+      expect(hasFoundingMemberWarning).toBe(true);
+    });
+
+    it('Direct buyer requests for subscription + ongoing continuation value qualifies Membership', () => {
+      const requestedMembershipAnswers: QuestionnaireAnswers = {
+        ...baseAnswers,
+        problemFrequency: 'weekly',
+        hasRecurringPaymentBehavior: 'no',
+        explicitRecurringRequestReceived: true,
+        recurringValueReason: 'ممارسة ومتابعة دورية ومساءلة أسبوعية وتغذية راجعة لحالات جديدة',
+        deliveryMechanism: ['community', 'live_coaching'],
+        creatorTimePerCustomer: 'recurring_support',
+        audienceAccessLevel: 'direct_daily',
+      };
+
+      const report = analyzeOpportunity(requestedMembershipAnswers);
+
+      expect(report.formatRecommendation.primary.titleEn).toBe('Membership');
+    });
+
+    it('Recurring problem with repeat buyers but NO explicit subscription demand falls back to one-time/pilot formats', () => {
+      const repeatBuyersNoSubAnswers: QuestionnaireAnswers = {
+        ...baseAnswers,
+        problemFrequency: 'weekly',
+        hasRecurringPaymentBehavior: 'repeat_buyers_no_sub',
+        recurringBuyerCountApprox: 5,
+        explicitRecurringRequestReceived: false,
+        recurringValueReason: 'متابعة دورية وتحديثات',
+        deliveryMechanism: ['live_coaching', 'framework_steps'],
+        creatorTimePerCustomer: '1_to_2h',
+        audienceAccessLevel: 'occasional',
+      };
+
+      const report = analyzeOpportunity(repeatBuyersNoSubAnswers);
+
+      // Must NOT recommend Membership as primary because subscription demand was never validated
+      expect(report.formatRecommendation.primary.titleEn).not.toBe('Membership');
+      expect(['Live Workshop', 'Cohort / Sprint', 'Hybrid Product', 'Productized Consulting']).toContain(
+        report.formatRecommendation.primary.titleEn
+      );
+    });
+
+    it('Documented retention data without actual recurring payments or subscription requests does NOT qualify Membership', () => {
+      const retentionOnlyAnswers: QuestionnaireAnswers = {
+        ...baseAnswers,
+        problemFrequency: 'weekly',
+        hasRecurringPaymentBehavior: 'no', // No actual recurring payments
+        explicitRecurringRequestReceived: false, // No explicit subscription requests
+        hasDocumentedRetentionData: true, // Retention data is documented (supporting scale evidence only)
+        recurringValueReason: 'تحديثات ومراجعات مستمرة دورية للأعضاء', // Has ongoing renewal rationale
+        deliveryMechanism: ['framework_steps', 'templates_tools'],
+        creatorTimePerCustomer: 'under_30m',
+        audienceAccessLevel: 'direct_daily',
+      };
+
+      const report = analyzeOpportunity(retentionOnlyAnswers);
+
+      // Primary must NOT be Membership
+      expect(report.formatRecommendation.primary.titleEn).not.toBe('Membership');
+      expect(['Actionable Toolkit & Templates', 'Playbook', 'Mini Course', 'Live Workshop']).toContain(
+        report.formatRecommendation.primary.titleEn
+      );
+
+      // Secondary must NOT be Membership
+      expect(report.formatRecommendation.secondary?.titleEn).not.toBe('Membership');
+
+      // Sprint mode must NOT be recurring
+      expect(report.sprintMode).not.toBe('RECURRING_MODEL_VALIDATION_SPRINT');
+
+      // Membership must be in the Avoid list because subscription demand is absent
+      const avoidMembership = report.formatRecommendation.avoid.find((a) =>
+        a.titleEn.toLowerCase().includes('membership')
+      );
+      expect(avoidMembership).toBeDefined();
+    });
+  });
 });

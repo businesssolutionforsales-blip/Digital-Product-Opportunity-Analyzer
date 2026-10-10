@@ -75,39 +75,53 @@ export function inferValidationMaturityStage(answers: QuestionnaireAnswers): Val
     'سؤال', 'بيسأل', 'استفسار', 'ازاي', 'إزاي', 'طريقة', 'حل', 'مشكلة', 'ليه'
   ].some((sig) => repeatedQ.includes(sig));
 
-  // Explicit Scale Readiness criteria (Must be explicitly proven, never inferred from 3 pilots)
-  const isScaleYes = (val: any) => val === true || val === 'yes';
-  const hasExplicitScaleEvidence =
-    isScaleYes(answers.hasRepeatableAcquisitionChannel) &&
-    isScaleYes(answers.hasStableLeadFlow) &&
-    isScaleYes(answers.hasRepeatProductSales) &&
-    (isScaleYes(answers.hasMeasuredConversionRate) || isScaleYes(answers.hasDocumentedRetentionData));
+  // Explicit Repeatable Delivery criteria (Prerequisite for both Stage 5 and Stage 6)
+  const isDeliveryYes = (val: any) => val === true || val === 'yes';
+  const hasDeliveredMultipleTimes = isDeliveryYes(answers.hasDeliveredSolutionMultipleTimes);
+  const understandsDeliveryBurden =
+    isDeliveryYes(answers.understandsStandardVsCustomDelivery) || isDeliveryYes(answers.knowsActualDeliveryBurden);
+  const hasRepeatableProcess = isDeliveryYes(answers.hasRepeatableDeliveryProcess);
 
-  // STAGE 6: Scale Evidence (Strictly requires explicit scale evidence)
-  if (hasExplicitScaleEvidence && (hasSoldRelatedWork || hasClients || hasActualPaidMoney) && hasClientResults) {
+  const hasExplicitRepeatableDelivery =
+    hasDeliveredMultipleTimes && understandsDeliveryBurden && hasRepeatableProcess;
+
+  const hasPaidOrClientEvidence =
+    hasActualPaidMoney || hasSoldRelatedWork || (hasClients && hasClientResults);
+
+  const meetsStage5RepeatableDelivery =
+    hasExplicitRepeatableDelivery && hasPaidOrClientEvidence;
+
+  // Explicit Scale Readiness criteria (Must be explicitly proven, never inferred from pilots alone)
+  const isScaleYes = (val: any) => val === true || val === 'yes';
+  const hasRepeatableAcquisition = isScaleYes(answers.hasRepeatableAcquisitionChannel);
+  const hasStableLeads = isScaleYes(answers.hasStableLeadFlow);
+  const hasRepeatSales = isScaleYes(answers.hasRepeatProductSales);
+  const hasCommercialPerformance =
+    isScaleYes(answers.hasMeasuredConversionRate) || isScaleYes(answers.hasDocumentedRetentionData);
+  const hasOperationalCapacity = isScaleYes(answers.hasDeliveryCapacityAndClearBottlenecks);
+
+  const hasCompleteScaleInfrastructure =
+    hasRepeatableAcquisition &&
+    hasStableLeads &&
+    hasRepeatSales &&
+    hasCommercialPerformance &&
+    hasOperationalCapacity;
+
+  // STAGE 6: Scale Evidence (Strictly requires Stage 5 repeatable delivery + client results + complete scale infrastructure)
+  if (meetsStage5RepeatableDelivery && hasClientResults && hasCompleteScaleInfrastructure) {
     return {
       stage: 'STAGE_6_SCALE_EVIDENCE',
       stageNumber: 6,
       labelAr: 'المرحلة 6: جاهزية التوسع (Scale Evidence)',
       labelEn: 'Scale Evidence',
       summaryAr:
-        'تمتلك أدلة توسع تشغيلية وقناة استقطاب وتدفق عملاء مستقر؛ التركيز على أتمتة النمو وإزالة اختناقات التسليم.',
+        'تمتلك أدلة توسع تشغيلية وقناة استقطاب وتدفق عملاء مستقر وسعة تسليم واضحة؛ التركيز على أتمتة النمو وإزالة اختناقات التسليم.',
     };
   }
 
   // STAGE 5: Repeatable Delivery (Explicit repeatable delivery evidence required)
-  // Requirement #4: Previous service clients or 3 paid pilots alone remain Stage 4 without explicit repeatability proof!
-  const isDeliveryYes = (val: any) => val === true || val === 'yes';
-  const hasDeliveredMultipleTimes = isDeliveryYes(answers.hasDeliveredSolutionMultipleTimes);
-  const understandsDeliveryBurden =
-    isDeliveryYes(answers.understandsStandardVsCustomDelivery) || isDeliveryYes(answers.knowsActualDeliveryBurden);
-  const hasRepeatableProcess =
-    isDeliveryYes(answers.hasRepeatableDeliveryProcess) || answers.uniqueMethodType === 'proprietary_framework';
-
-  const hasExplicitRepeatableDelivery =
-    hasDeliveredMultipleTimes && understandsDeliveryBurden && hasRepeatableProcess;
-
-  if (hasExplicitRepeatableDelivery && (hasActualPaidMoney || hasSoldRelatedWork || (hasClients && hasClientResults))) {
+  // Previous service clients or 3 paid pilots alone remain Stage 4 without explicit repeatability proof!
+  if (meetsStage5RepeatableDelivery) {
     return {
       stage: 'STAGE_5_REPEATABLE_DELIVERY',
       stageNumber: 5,
@@ -266,7 +280,8 @@ export function analyzeOpportunity(
     opportunityScore,
     confidenceScore,
     answers,
-    validationMaturity
+    validationMaturity,
+    formatRecommendation.primary
   );
 
   // Requirement #14: Report Consistency Guard
@@ -1268,24 +1283,28 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
 
   const hasProvenDemand = hasPaymentEvidence;
 
-  // Explicit Recurring Payment Evidence (Selling consulting repeatedly is NOT subscription demand!)
-  const hasExplicitMonthlyBehavior =
-    answers.hasRecurringPaymentBehavior === 'recurring_monthly';
-  const hasRepeatBuyersBehavior =
+  // 1. Repeat one-time purchases (e.g. repeated consulting or ad-hoc service clients — NOT subscription demand!)
+  const hasRepeatOneTimePurchases =
     answers.hasRecurringPaymentBehavior === 'repeat_buyers_no_sub';
 
-  const hasRecurringPaymentEvidence =
-    hasExplicitMonthlyBehavior ||
-    (hasRepeatBuyersBehavior && (Number(answers.recurringBuyerCountApprox) > 3 || answers.hasExistingPayingClients === true));
+  // 2. Explicit recurring payment behavior (monthly/periodic recurring subscription or retainer)
+  const hasExplicitMonthlyBehavior =
+    answers.hasRecurringPaymentBehavior === 'recurring_monthly';
 
-  // Requirement #2: DO NOT INFER EXPLICIT RECURRING REQUESTS FROM GENERIC TEXT
-  // explicitRecurringRequestReceived must be primary source of truth!
+  // Direct recurring-payment evidence (actual recurring payments)
+  const hasRecurringPaymentEvidence = hasExplicitMonthlyBehavior;
+
+  // 3. Direct buyer requests for subscriptions (expressed subscription intent / demand)
   const hasExplicitRecurringRequest =
     answers.explicitRecurringRequestReceived === true ||
     answers.explicitRecurringRequestReceived === 'yes';
 
-  // Requirement #3: DO NOT TREAT RECURRING PROBLEM ALONE AS A VALID RENEWAL REASON
-  // Require explicit continuation mechanism: ongoing practice, new cases, accountability, recurring feedback, updates, community
+  // 4. Documented retention data (Supporting scale-readiness evidence only — does NOT independently establish recurring payments or subscription demand)
+  const hasDocumentedRetentionData =
+    answers.hasDocumentedRetentionData === true ||
+    answers.hasDocumentedRetentionData === 'yes';
+
+  // 5. Credible ongoing value and renewal mechanism (Require explicit continuation mechanism: ongoing practice, new cases, accountability, recurring feedback, updates, community)
   const recurringReasonText = (answers.recurringValueReason || '').trim().toLowerCase();
   const continuationSignals = [
     'تحديث', 'تحديثات', 'ممارسة', 'متابعة', 'مراجعة', 'فرص', 'تطوير', 'تطبيق', 'حالات جديدة',
@@ -1296,6 +1315,12 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
 
   // If recurringValueReason is empty/unknown, Membership loses confidence even if problem repeats
   const hasValidRecurringReason = hasCredibleContinuationMechanism;
+
+  // TRUE SUBSCRIPTION DEMAND:
+  // Requires actual recurring payment evidence OR explicit direct buyer subscription requests.
+  // Supporting retention data, paying clients, or repeat one-time purchases alone do NOT establish subscription demand!
+  const hasSubscriptionDemand =
+    hasRecurringPaymentEvidence || hasExplicitRecurringRequest;
 
   const canSustainRecurringDelivery =
     isRecurringSupport ||
@@ -1437,7 +1462,8 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
         (hasLiveCalls ? 25 : 0) +
         (isHighTouch ? 25 : -35) +
         (isPremiumTier || answers.expectedPriceTier === 'mid_150_500' ? 25 : 0) +
-        (hasExistingAudience ? 15 : -15),
+        (hasExistingAudience ? 15 : -15) +
+        (hasRepeatOneTimePurchases ? 15 : 0),
       info: {
         titleAr: 'معسكر تطبيقي محدد المدة 7–14 يوم (Implementation Sprint / Cohort)',
         titleEn: 'Cohort / Sprint',
@@ -1453,21 +1479,24 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
       id: 'membership',
       score:
         10 +
-        (isRecurringProblem ? 40 : -60) +
-        (isRecurringSupport ? 35 : -40) +
-        (hasRecurringPaymentEvidence ? 45 : -35) +
-        (hasExistingAudience ? 25 : -30) +
-        (hasCommunity ? 25 : 0) +
-        (hasLiveCalls ? 20 : 0) +
-        (accountabilityRequired ? 20 : 0) +
-        (hasExplicitRecurringRequest ? 30 : -20) +
-        (hasValidRecurringReason ? 30 : -50) + // Strong penalty if credible continuation value reason is absent or unverified
-        (canSustainRecurringDelivery ? 20 : -20),
+        (isRecurringProblem ? 35 : -70) +
+        (isRecurringSupport ? 30 : -35) +
+        (hasRecurringPaymentEvidence ? 45 : hasExplicitRecurringRequest ? 30 : -45) +
+        (hasExistingAudience ? 20 : -30) +
+        (hasCommunity ? 20 : 0) +
+        (hasLiveCalls ? 15 : 0) +
+        (accountabilityRequired ? 15 : 0) +
+        (hasValidRecurringReason ? 30 : -60) + // Strong penalty if credible continuation value reason is absent or unverified
+        (canSustainRecurringDelivery ? 15 : -25) +
+        // Supporting retention data provides a modest bonus ONLY when verified subscription demand already exists
+        (hasDocumentedRetentionData && hasSubscriptionDemand ? 15 : 0) +
+        // Repeated purchases of consulting/services without subscription demand is a classic trap — penalize membership
+        (hasRepeatOneTimePurchases && !hasSubscriptionDemand ? -30 : 0),
       info: {
         titleAr: 'عضوية شهرية / اشتراك دوري (Recurring Membership)',
         titleEn: 'Membership',
         whyFitAr:
-          'يناسب المشاكل المتكررة شهريًا التي تتطلب تحديثات دورية أو استشارات جماعية مستمرة، ويخلق تدفقًا نقديًا متوقعًا ومستقرًا.',
+          'يناسب المشاكل المتكررة شهريًا التي تتطلب تحديثات دورية أو استشارات جماعية مستمرة مع وجود طلب مثبت وقيمة متجددة، ويخلق تدفقًا نقديًا متوقعًا ومستقرًا.',
         speedToFirstValue: 'مستمرة مع كل تحديث أو جلسة شهرية',
         deliveryBurden: 'التزام إنتاج ودعم مستمر شهريًا',
       },
@@ -1520,6 +1549,7 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
         (isHighTouch ? 35 : -45) +
         (isPremiumTier ? 35 : 0) +
         (isBackendFeeder ? 30 : 0) +
+        (hasRepeatOneTimePurchases ? 25 : 0) +
         (answers.transformationRealism === 'depends_on_many_external_factors' ? 20 : 0),
       info: {
         titleAr: 'استشارة مقننة بنظام محدد ومخرجات ثابتة (Productized Consulting Sprint)',
@@ -1538,7 +1568,8 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
         30 +
         ((hasTemplates || hasFramework) && (feedbackRequired || hasLiveCalls) ? 45 : 0) +
         (answers.creatorTimePerCustomer === 'under_30m' || answers.creatorTimePerCustomer === '1_to_2h' ? 30 : 0) +
-        (answers.expectedPriceTier === 'mid_150_500' || isPremiumTier ? 25 : 0),
+        (answers.expectedPriceTier === 'mid_150_500' || isPremiumTier ? 25 : 0) +
+        (hasRepeatOneTimePurchases ? 15 : 0),
       info: {
         titleAr: 'منتج هجين: نظام رقمي + مراجعة تطبيقية جماعية (Hybrid System + Group Review)',
         titleEn: 'Hybrid Product',
@@ -1555,10 +1586,12 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
     if (b.score !== a.score) {
       return b.score - a.score;
     }
-    // When problem/value is recurring and recurring evidence exists, Membership / Community has contextual priority over one-time courses
-    if (isRecurringProblem && (hasRecurringPaymentEvidence || isRecurringSupport || hasCommunity)) {
+    // When problem/value is recurring and PROVEN subscription demand + credible continuation value exist:
+    if (isRecurringProblem && hasSubscriptionDemand && hasValidRecurringReason) {
       if (a.id === 'membership') return -1;
       if (b.id === 'membership') return 1;
+    }
+    if (isRecurringProblem && (hasSubscriptionDemand || isRecurringSupport) && hasCommunity) {
       if (a.id === 'paid_community') return -1;
       if (b.id === 'paid_community') return 1;
     }
@@ -1571,6 +1604,31 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
     }
     return 0;
   });
+
+  // Membership Recommendation Safeguards:
+  // A recurring problem alone must NOT qualify a Membership as the primary recommended format.
+  // Use explicit recurring evidence and credible ongoing value to determine whether Membership is a justified primary recommendation.
+  // Where recurring evidence is insufficient, prefer an appropriately scored one-time or pilot format instead of a membership.
+  const isMembershipJustified =
+    isRecurringProblem && hasSubscriptionDemand && hasValidRecurringReason;
+
+  if (options[0].id === 'membership' && !isMembershipJustified) {
+    const memIndex = options.findIndex((opt) => opt.id === 'membership');
+    if (memIndex !== -1) {
+      const [memOpt] = options.splice(memIndex, 1);
+      // Place it after qualified one-time or pilot formats
+      options.splice(2, 0, memOpt);
+    }
+  }
+
+  // Also safeguard secondary format if recurring evidence is insufficient
+  if (options[1]?.id === 'membership' && !isMembershipJustified) {
+    const memIndex = options.findIndex((opt) => opt.id === 'membership');
+    if (memIndex === 1 && options.length > 2) {
+      const [memOpt] = options.splice(memIndex, 1);
+      options.splice(2, 0, memOpt);
+    }
+  }
 
   const primary = options[0].info;
   const secondary = options[1].info;
@@ -1591,15 +1649,29 @@ function buildFormatRecommendation(answers: QuestionnaireAnswers): {
   // Membership only discouraged when THIS case lacks the essential conditions:
   const lacksRecurringNeed = isOneTimeProblem;
   const lacksAudienceAccess = answers.audienceAccessLevel === 'none_yet' || answers.audienceAccessLevel === 'unsure';
-  const lacksRecurringEvidence = !hasRecurringPaymentEvidence && !hasExplicitRecurringRequest;
+  const lacksRecurringEvidence = !hasSubscriptionDemand;
+  const lacksContinuationMechanism = !hasValidRecurringReason;
   const lacksDeliveryCapacity = answers.creatorTimePerCustomer === 'high_touch' && answers.availableWeeklyHours === 'under_5';
 
-  if (lacksRecurringNeed || (lacksAudienceAccess && lacksRecurringEvidence) || lacksDeliveryCapacity) {
+  if (
+    lacksRecurringNeed ||
+    (lacksAudienceAccess && lacksRecurringEvidence) ||
+    lacksDeliveryCapacity ||
+    (hasRepeatOneTimePurchases && lacksRecurringEvidence) ||
+    (isRecurringProblem && (lacksRecurringEvidence || lacksContinuationMechanism))
+  ) {
+    let whyNotAr = 'العضويات تتطلب حاجة متجددة واستبقاءً مستمرًا للأعضاء (Retention). البدء بها دون وجود مشكلة تتجدد دوريًا أو وصول كافٍ للجمهور يؤدي للاستنزاف التشغيلي والتسرب السريع للمشتركين.';
+    if (hasRepeatOneTimePurchases && lacksRecurringEvidence) {
+      whyNotAr = 'تكرار شراء الاستشارات أو الخدمات الفردية يثبت ثقة العملاء في خبرتك، لكنه لا يعني رغبتهم في اشتراك شهري مستمر. المنتجات محددة النتيجة بدفعة واحدة أسهل في التحقق والبيع دون استنزاف تشغيلي.';
+    } else if (isRecurringProblem && lacksContinuationMechanism) {
+      whyNotAr = 'رغم تكرار المشكلة، لا توجد آلية استبقاء وقيمة متجددة واضحة تجعل العضو يجدد اشتراكه شهريًا بعد استهلاك المحتوى الأساسي. البدء بمنتج لمرة واحدة أو ورشة عمل أضمن لمنع التسرب المبكر.';
+    } else if (isRecurringProblem && lacksRecurringEvidence) {
+      whyNotAr = 'المشكلة متكررة ولكن لا توجد مدفوعات اشتراك دورية فعلية أو طلبات اشتراك صريحة من العملاء. بيانات الاستبقاء العامة وحدها لا تثبت استعداد السوق للدفع الدوري؛ البدء بمنتج محدد النتيجة أضمن.';
+    }
     avoid.push({
       titleAr: 'اشتراك شهري أو مجتمع مدفوع (Recurring Membership / Paid Community)',
       titleEn: 'Membership / Community',
-      whyNotAr:
-        'العضويات تتطلب حاجة متجددة واستبقاءً مستمرًا للأعضاء (Retention). البدء بها دون وجود مشكلة تتجدد دوريًا أو وصول كافٍ للجمهور يؤدي للاستنزاف التشغيلي والتسرب السريع للمشتركين.',
+      whyNotAr,
     });
   }
 
@@ -2550,12 +2622,24 @@ function buildWhatNotToDo(
         'قيمة العضوية الحقيقية تكمن في وضوح المسار وجلسات المتابعة وحل المشكلات المتكررة، وليس في تحويل نفسك لآلة نشر محتوى تصاب بالإرهاق بعد شهرين.',
     });
   } else {
-    // Only discourage membership if it's NOT recommended and lacks recurring foundations
+    // Discourage membership if it's NOT recommended and lacks recurring foundations or has repeat consulting without subscription demand
     const lacksRecurringNeed = answers.problemFrequency === 'occasional' || answers.problemFrequency === 'unsure';
     const lacksAudienceAccess = answers.audienceAccessLevel === 'none_yet' || answers.audienceAccessLevel === 'unsure';
-    if (lacksRecurringNeed || lacksAudienceAccess) {
+    const hasRepeatPurchasesWithoutSub = answers.hasRecurringPaymentBehavior === 'repeat_buyers_no_sub';
+    const lacksRecurringDemand =
+      answers.hasRecurringPaymentBehavior !== 'recurring_monthly' &&
+      answers.explicitRecurringRequestReceived !== true &&
+      answers.explicitRecurringRequestReceived !== 'yes';
+
+    if (hasRepeatPurchasesWithoutSub && lacksRecurringDemand) {
       items.push({
-        headlineAr: 'متتجهش لنظام اشتراكات شهرية (Membership) دون حاجة متجددة أسبوعيًا',
+        headlineAr: 'متفترضش إن تكرار شراء الاستشارات يعني رغبة في اشتراك شهري',
+        rationaleAr:
+          'شراء العميل لاستشارة أو خدمة عدة مرات يعكس ثقة شخصية، ولا يعني رغبته في دفع اشتراك دوري ثابت. ابدأ بحزم خبرتك في منتج مقنن محدد النتيجة بدفعة واحدة أولاً.',
+      });
+    } else if (lacksRecurringNeed || lacksAudienceAccess || lacksRecurringDemand) {
+      items.push({
+        headlineAr: 'متتجهش لنظام اشتراكات شهرية (Membership) دون حاجة متجددة واستبقاء مثبت',
         rationaleAr:
           'العضويات تحتاج مشكلة تتكرر باستمرار وسببًا قويًا لتجديد الاشتراك كل 30 يومًا. المنتجات محددة النتيجة بدفعة واحدة أسهل في التحقق والبيع لهذه الحالة.',
       });
@@ -2595,9 +2679,9 @@ function buildWhatNotToDo(
   // Consistency Check: Ensure no warning directly contradicts the recommended primary format
   const sanitized = items.filter((item) => {
     if (primaryEn.includes('workshop') && item.headlineAr.includes('ورشة')) return false;
-    if (primaryEn.includes('membership') && item.headlineAr.includes('اشتراك شهري')) return false;
+    if (primaryEn.includes('membership') && (item.headlineAr.includes('متتجهش لنظام اشتراكات') || item.headlineAr.includes('متفترضش إن تكرار شراء الاستشارات'))) return false;
     if (primaryEn.includes('toolkit') && item.headlineAr.includes('قوالب')) return false;
-    if (primaryEn.includes('consulting') && item.headlineAr.includes('استشارة')) return false;
+    if (primaryEn.includes('consulting') && (item.headlineAr.includes('استشارة') || item.headlineAr.includes('الخدمة الفردية'))) return false;
     return true;
   });
 
@@ -2793,50 +2877,176 @@ function buildNextThreeQuestions(
   return selected.slice(0, 3);
 }
 
-function buildPersonalizedNextStep(
+export function buildPersonalizedNextStep(
   opportunityScore: number,
   confidenceScore: number,
   answers: QuestionnaireAnswers,
-  validationMaturity?: ValidationMaturityInfo
+  validationMaturity?: ValidationMaturityInfo,
+  primaryFormat?: ProductFormatInfo
 ): {
   headlineAr: string;
   buttonLabelAr: string;
   subtextAr: string;
-  targetModule: 'creator_validation' | 'creator_mvp' | 'seller_offer';
+  targetModule: 'creator_validation' | 'creator_mvp' | 'reassessment' | 'seller_offer';
 } {
   const stageNum = validationMaturity?.stageNumber ?? 0;
+  const isPrimaryMembership = (primaryFormat?.titleEn || '').toLowerCase().includes('membership');
+  const hasDirectRecurringPayments = answers.hasRecurringPaymentBehavior === 'recurring_monthly';
+  const hasExplicitRequests =
+    answers.explicitRecurringRequestReceived === true || answers.explicitRecurringRequestReceived === 'yes';
+  const hasValidatedRecurringDemand = isPrimaryMembership && (hasDirectRecurringPayments || hasExplicitRequests);
 
-  if (stageNum >= 4 && opportunityScore >= 70) {
+  // 1. Reassessment case: when Opportunity Score is low (< 50) or core idea fundamentals require rethink
+  if (opportunityScore < 50) {
     return {
-      headlineAr: 'أنت تمتلك دليلاً واقعيًا قويًا وعملاء سابقين؛ حان وقت حزم الخبرة في منتج رقمي مستقل.',
-      buttonLabelAr: 'أطلق عرض الأعضاء المؤسسين (Founding Offer)',
-      subtextAr: 'حوّل خبرتك وخدماتك السابقة لأصول متكررة تمنحك دخلاً ماليًا مستقلاً دون استنزاف ساعاتك الشخصية.',
-      targetModule: 'creator_mvp',
+      headlineAr: 'الفكرة تحتاج لإعادة صياغة المشكلة والشريحة لرفع قوة العرض قبل البدء.',
+      buttonLabelAr: 'عدّل معطيات الفكرة وأعد التقييم',
+      subtextAr: 'راجع توصيات التقرير ونقاط المخاطرة لتعديل زاوية المنتج واختباره مجددًا.',
+      targetModule: 'reassessment',
     };
   }
 
-  if (confidenceScore < 50 || stageNum <= 1) {
+  // 2. Creator Validation: Low confidence (< 50) - data is incomplete or speculative regardless of theoretical opportunity score
+  if (confidenceScore < 50) {
     return {
-      headlineAr: 'أولويتك الآن ليست بناء المنتج أو كتابة محتواه — بل جمع الدليل الناقص من السوق.',
+      headlineAr: 'نقاط الفرصة أولية ولكن درجة الثقة منخفضة لنقص الأدلة؛ الأولوية لجمع الدليل من السوق.',
       buttonLabelAr: 'ابدأ خطة التحقق السريعة (7 أيام)',
-      subtextAr: 'اتبع خطوات الأسبوع لتأكيد استعداد الجمهور للشراء قبل استثمار دقيقة واحدة في التسجيل.',
+      subtextAr: 'اتبع معسكر التحقق الميداني لسد فجوات البيانات وتأكيد حاجة العملاء قبل استثمار الوقت في البناء.',
       targetModule: 'creator_validation',
     };
   }
 
-  if (opportunityScore >= 75) {
+  // 3. Creator Validation: Stage 0 (Assumption) or Stage 1 (Problem Evidence)
+  // High Opportunity Score alone must NEVER imply paid demand or bypass problem validation
+  if (stageNum <= 1) {
     return {
-      headlineAr: 'فرصتك واعدة والأدلة كافية للانتقال للخطوة التالية. حان وقت تجهيز النسخة الأولية وعرض البيع.',
-      buttonLabelAr: 'صمم النسخة الأولية (MVP)',
-      subtextAr: 'ركز على بناء القوالب أو مسودة الورشة التفاعلية لإطلاق العرض التجريبي.',
+      headlineAr: 'أولويتك الآن ليست بناء المنتج أو كتابة محتواه — بل جمع الدليل الميداني وتأكيد المشكلة.',
+      buttonLabelAr: 'ابدأ خطة التحقق السريعة (7 أيام)',
+      subtextAr: 'اتبع معسكر التحقق السريع للتأكد من وجود سلوك بحث وبدائل حقيقية لدى الجمهور قبل كتابة حرف واحد.',
+      targetModule: 'creator_validation',
+    };
+  }
+
+  // 4. Creator Validation: Stage 2 (Interest Evidence)
+  // Inbound requests or waitlists present interest, but NO purchase commitment or payment exists yet
+  if (stageNum === 2) {
+    return {
+      headlineAr: 'لديك مؤشرات اهتمام واستفسارات أولية؛ الأولوية الآن لاختبار الجدية وطلب التزام مالي حقيقي.',
+      buttonLabelAr: 'ابدأ خطة التحقق السريعة (7 أيام)',
+      subtextAr: 'استفد من معسكر التحقق لتحويل قوائم الانتظار والرسائل إلى التزام مالي واضح وتأكيد رغبة الدفع.',
+      targetModule: 'creator_validation',
+    };
+  }
+
+  // 5. Stage 6: Scale Evidence
+  if (stageNum >= 6) {
+    // 5A. Strong Opportunity Score (>= 75): Full scale Offer Architecture Lab route
+    if (opportunityScore >= 75) {
+      return {
+        headlineAr: 'تمتلك أدلة توسع تشغيلية وقناة تدفق عملاء مستقرة؛ حان وقت هندسة عرض البيع التوسعي.',
+        buttonLabelAr: 'انتقل لمعمل هندسة العروض (Offer Architecture)',
+        subtextAr: 'قم بصياغة باقات العرض المتقدمة واستراتيجية التسعير لتحويل خدماتك إلى أصل تجاري متوسع ومؤتمت.',
+        targetModule: 'seller_offer',
+      };
+    }
+
+    // 5B. Moderate Opportunity Score (50 <= opportunityScore < 75): Maturity-appropriate intermediate recommendation
+    // Advanced operators should NOT be sent to beginner validation or generic reassessment
+    return {
+      headlineAr: 'تمتلك بنية تشغيلية وتجارية متقدمة؛ الأولوية الآن لصقل زاوية المنتج واختبار عرض مصغر (MVP) قبل التوسع الكامل.',
+      buttonLabelAr: 'صمم النسخة الأولية واختبر العرض (MVP)',
+      subtextAr: 'خبرتك وقنواتك مثبتة، لكن زاوية هذا المنتج بالتحديد تحتاج إلى ضبط هوامش الربح وشكل التسليم عبر نسخة أولية سريعة قبل إطلاق حملات بيع واسعة.',
       targetModule: 'creator_mvp',
     };
   }
 
+  // 6. Creator MVP: Stage 5 (Repeatable Delivery)
+  // Proven repeatable delivery exists, but acquisition channels or scale readiness are NOT yet proven
+  if (stageNum === 5) {
+    if (isPrimaryMembership) {
+      if (hasDirectRecurringPayments) {
+        return {
+          headlineAr: 'تمتلك سابقة تسليم متكررة وسابقة دفع دوري مثبتة؛ حان وقت إطلاق النسخة التجريبية للأعضاء المؤسسين.',
+          buttonLabelAr: 'أطلق عرض الأعضاء المؤسسين (Founding Member Pilot)',
+          subtextAr: 'ابدأ بدفعة مغلقة من 5 إلى 10 أعضاء لتأكيد الاستبقاء والاستمرار شهريًا وتقنين عبء التسليم.',
+          targetModule: 'creator_mvp',
+        };
+      }
+
+      if (hasExplicitRequests) {
+        return {
+          headlineAr: 'تمتلك سابقة تسليم متكررة وطلبات اشتراك صريحة دون دفع دوري مثبت؛ اختبر العضوية مع أعضاء مؤسسين.',
+          buttonLabelAr: 'أطلق عرض الأعضاء المؤسسين (Founding Member Pilot)',
+          subtextAr: 'الطلبات الصريحة تعبر عن اهتمام مبدئي، لكن الاستبقاء والدفع الشهري يحتاجان لاختبار عملي مع دفعة مصغرة لتقنين التجربة.',
+          targetModule: 'creator_mvp',
+        };
+      }
+    }
+
+    return {
+      headlineAr: 'تمتلك سابقة تسليم متكررة ومثبتة؛ الأولوية الآن لتقنين التسليم وتوحيد التجربة في منتج رقمي (MVP).',
+      buttonLabelAr: 'صمم النسخة الأولية (MVP)',
+      subtextAr: 'حوّل خطوات تسليمك المكررة إلى أصول وقوالب موحدة لتخفيف العبء الفردي قبل التفكير في التوسع التسويقي.',
+      targetModule: 'creator_mvp',
+    };
+  }
+
+  // 7. Creator MVP: Stage 4 (Actual Paid Evidence - Pilot, Deposit, or Paying Clients)
+  if (stageNum === 4) {
+    if (isPrimaryMembership) {
+      // Case A: Verified recurring payment behavior
+      if (hasDirectRecurringPayments) {
+        return {
+          headlineAr: 'تمتلك سابقة دفع دوري مثبتة واحتياجًا متكررًا؛ حان وقت إطلاق النسخة التجريبية للأعضاء المؤسسين.',
+          buttonLabelAr: 'أطلق عرض الأعضاء المؤسسين (Founding Member Pilot)',
+          subtextAr: 'ابدأ بدفعة مغلقة من 5 إلى 10 أعضاء مؤسسين لتأكيد الاستبقاء قبل فتح الاشتراك للعامة.',
+          targetModule: 'creator_mvp',
+        };
+      }
+
+      // Case B: Explicit requests for a recurring membership without verified recurring payments
+      if (hasExplicitRequests) {
+        return {
+          headlineAr: 'تلقيت طلبات صريحة للاشتراك الدوري لكن الدفع والاستبقاء لم يُثبتا بعد؛ اختبر التجربة عبر أعضاء مؤسسين.',
+          buttonLabelAr: 'أطلق عرض الأعضاء المؤسسين (Founding Member Pilot)',
+          subtextAr: 'الطلبات المباشرة تعبر عن رغبة مبدئية، لكن الاستمرار والدفع الفعلي شهريًا يحتاجان لاختبار عملي مع دفعة مصغرة (5–10 أعضاء) قبل بناء منصة العضوية.',
+          targetModule: 'creator_mvp',
+        };
+      }
+
+      // Case C & D: Repeat buyers without subscription demand or unvalidated recurring demand
+      return {
+        headlineAr: 'لديك سابقة دفع حقيقية ولكن دون طلب اشتراك دوري مثبت؛ الأولوية لنسخة أولية محددة المخرجات.',
+        buttonLabelAr: 'صمم النسخة الأولية (MVP)',
+        subtextAr: 'ابدأ بحزمة أو ورشة عمل ذات مخرجات واضحة بدلاً من الالتزام بعضوية مستمرة غير مؤكدة الاستبقاء.',
+        targetModule: 'creator_mvp',
+      };
+    }
+
+    return {
+      headlineAr: 'لديك سابقة دفع حقيقية أو عملاء حاليون؛ حان وقت تأطير الحل وبناء النسخة الأولية (MVP) السريعة.',
+      buttonLabelAr: 'صمم النسخة الأولية (MVP)',
+      subtextAr: 'ركز على بناء القوالب أو مسودة ورشة العمل لإطلاق العرض التجريبي وخدمة المشترين الأوائل.',
+      targetModule: 'creator_mvp',
+    };
+  }
+
+  // 8. Creator MVP: Stage 3 (Commitment Without Payment)
+  // Pre-purchase commitment or reservation exists, but money has NOT changed hands yet
+  if (stageNum === 3) {
+    return {
+      headlineAr: 'لديك التزام مسبق ومؤشرات طلب جادة دون دفع مالي بعد؛ حان وقت تصميم النسخة الأولية (MVP) لاختبار الشراء الفعلي.',
+      buttonLabelAr: 'صمم النسخة الأولية (MVP)',
+      subtextAr: 'صمم نسخة مصغرة واضحة القيمة واطرحها على من أبدوا التزامهم لحسم الدفع وإطلاق أول تجربة.',
+      targetModule: 'creator_mvp',
+    };
+  }
+
+  // Fallback: Reassessment
   return {
-    headlineAr: 'الفكرة تحتاج لإعادة صياغة المشكلة والشريحة لرفع قوة العرض.',
+    headlineAr: 'الفكرة تحتاج لمزيد من الوضوح وصياغة الحل لرفع فرص النجاح.',
     buttonLabelAr: 'عدّل معطيات الفكرة وأعد التقييم',
-    subtextAr: 'راجع توصيات التقرير ونقاط المخاطرة لتعديل زاوية المنتج واختباره مجددًا.',
-    targetModule: 'creator_validation',
+    subtextAr: 'استخدم المحاكي التفاعلي لتعديل المعطيات واختبار سيناريوهات بديلة.',
+    targetModule: 'reassessment',
   };
 }

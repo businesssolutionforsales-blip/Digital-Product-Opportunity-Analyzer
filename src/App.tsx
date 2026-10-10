@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   UserPath,
   QuestionnaireAnswers,
@@ -9,6 +9,7 @@ import {
 } from './types';
 import { analyzeOpportunity } from './data/strategicEngine';
 import { queryStructuredAiInterpretation, computeAiInputFingerprint } from './services/aiService';
+import { resolveCtaNavigation } from './services/ctaNavigation';
 import { trackEvent } from './services/analytics';
 import { BrandHeader } from './components/BrandHeader';
 import { HeroSection } from './components/HeroSection';
@@ -97,6 +98,11 @@ export default function App() {
   const [showShareModal, setShowShareModal] = useState<boolean>(false);
   const [showSimulator, setShowSimulator] = useState<boolean>(false);
   const [legalModalType, setLegalModalType] = useState<'privacy' | 'terms' | null>(null);
+
+  // Meaningful navigation refs and notice state for personalized CTA
+  const validationSprintSectionRef = useRef<HTMLDivElement>(null);
+  const mvpSectionRef = useRef<HTMLDivElement>(null);
+  const [externalModuleNotice, setExternalModuleNotice] = useState<string | null>(null);
 
   // Check autosave on mount
   useEffect(() => {
@@ -446,12 +452,71 @@ export default function App() {
       setSelectedPath(null);
       setQuestionnaireDraft({});
       setCurrentSectionIndex(0);
+      setExternalModuleNotice(null);
       try {
         localStorage.removeItem('ma_analyzer_draft');
       } catch (e) {}
       setStep('landing');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
+  };
+
+  // Meaningful CTA Navigation Handler
+  const handlePersonalizedCtaClick = () => {
+    if (!activeReport) return;
+    const nextStep = activeReport.personalizedNextStep;
+    const targetModule = nextStep.targetModule;
+
+    const resolution = resolveCtaNavigation(
+      targetModule,
+      (import.meta as any).env?.VITE_OFFER_LAB_URL,
+      nextStep.buttonLabelAr
+    );
+
+    if (resolution.action === 'open_recalculate') {
+      setShowSimulator(true);
+      trackEvent('cta_clicked', {
+        target: targetModule,
+        action: 'open_recalculate',
+        destination: 'interactive_recalculate_modal',
+      });
+      return;
+    }
+
+    if (resolution.action === 'open_external_url' && resolution.externalUrl) {
+      trackEvent('cta_clicked', {
+        target: targetModule,
+        action: 'open_external_url',
+        destination: resolution.externalUrl,
+      });
+      window.open(resolution.externalUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    // Scroll to actual section with truthful fallback notice if external module unconfigured
+    if (resolution.fallbackNoticeAr) {
+      setExternalModuleNotice(resolution.fallbackNoticeAr);
+    } else {
+      setExternalModuleNotice(null);
+    }
+
+    const targetId = resolution.targetSectionId || 'section-validation-sprint';
+    const targetElement =
+      targetId === 'section-mvp-recommendation'
+        ? mvpSectionRef.current || document.getElementById('section-mvp-recommendation')
+        : validationSprintSectionRef.current || document.getElementById('section-validation-sprint');
+
+    if (targetElement) {
+      targetElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      targetElement.focus({ preventScroll: true });
+    }
+
+    trackEvent('cta_clicked', {
+      target: targetModule,
+      action: resolution.action,
+      destination: targetId,
+      is_fallback: !resolution.isExternalConfigured,
+    });
   };
 
   return (
@@ -644,13 +709,47 @@ export default function App() {
                 <PositioningStatementCard positioning={activeReport.positioning} />
 
                 {/* 8. MVP Recommendation */}
-                <MvpRecommendationCard mvp={activeReport.mvp} />
+                <div
+                  ref={mvpSectionRef}
+                  id="section-mvp-recommendation"
+                  tabIndex={-1}
+                  className="outline-none focus:ring-2 focus:ring-[#F5BF1E]/50 rounded-2xl transition-all"
+                  aria-label="قسم توصية نموذج النسخة الأولية MVP"
+                >
+                  {externalModuleNotice && (
+                    <div
+                      role="status"
+                      aria-live="polite"
+                      className="mb-4 p-4 rounded-xl bg-[#23170D] border border-[#F5BF1E]/50 text-[#F5BF1E] text-xs sm:text-sm flex items-start justify-between gap-3 shadow-lg"
+                    >
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                        <span>{externalModuleNotice}</span>
+                      </div>
+                      <button
+                        onClick={() => setExternalModuleNotice(null)}
+                        className="px-2 py-0.5 rounded text-xs bg-[#040405] border border-[#4A2F15] text-[#C8C5BA] hover:text-[#FCFCFA] shrink-0 cursor-pointer"
+                      >
+                        إغلاق
+                      </button>
+                    </div>
+                  )}
+                  <MvpRecommendationCard mvp={activeReport.mvp} />
+                </div>
 
                 {/* 9. 7-Day Validation Sprint */}
-                <ValidationSprintView
-                  sprint={activeReport.validationSprint}
-                  sprintModeLabelAr={activeReport.sprintModeLabelAr}
-                />
+                <div
+                  ref={validationSprintSectionRef}
+                  id="section-validation-sprint"
+                  tabIndex={-1}
+                  className="outline-none focus:ring-2 focus:ring-[#F5BF1E]/50 rounded-2xl transition-all"
+                  aria-label="خطة التحقق السريعة خلال 7 أيام"
+                >
+                  <ValidationSprintView
+                    sprint={activeReport.validationSprint}
+                    sprintModeLabelAr={activeReport.sprintModeLabelAr}
+                  />
+                </div>
 
                 {/* 10. 7 Customer Discovery Questions */}
                 <DiscoveryQuestionsCard questions={activeReport.discoveryQuestions} />
@@ -668,43 +767,52 @@ export default function App() {
                 />
 
                 {/* 14. Personalized Next Step Box */}
-                <div className="p-6 rounded-2xl bg-gradient-to-br from-[#23170D] to-[#040405] border border-[#F5BF1E]/50 text-right space-y-4 shadow-xl">
-                  <div>
-                    <span className="text-xs text-[#F5BF1E] font-medium tracking-wide">
-                      التوجيه الاستشاري الحاسم
-                    </span>
-                    <h3 className="font-heading font-bold text-lg sm:text-xl text-[#FCFCFA] mt-1 mb-1">
-                      {activeReport.personalizedNextStep.headlineAr}
-                    </h3>
-                    <p className="text-xs text-[#C8C5BA] leading-relaxed">
-                      {activeReport.personalizedNextStep.subtextAr}
-                    </p>
-                  </div>
+                {(() => {
+                  const ctaResolution = resolveCtaNavigation(
+                    activeReport.personalizedNextStep.targetModule,
+                    (import.meta as any).env?.VITE_OFFER_LAB_URL,
+                    activeReport.personalizedNextStep.buttonLabelAr
+                  );
+                  const displayButtonLabel =
+                    ctaResolution.resolvedButtonLabelAr || activeReport.personalizedNextStep.buttonLabelAr;
 
-                  <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
-                    <button
-                      onClick={() => {
-                        window.scrollTo({ top: 800, behavior: 'smooth' });
-                        trackEvent('cta_clicked', { target: activeReport.personalizedNextStep.targetModule });
-                      }}
-                      className="w-full sm:w-auto px-7 py-3 rounded-xl font-heading font-bold text-xs sm:text-sm bg-[#F5BF1E] text-[#040405] hover:brightness-105 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-[#F5BF1E]/10"
-                    >
-                      <span>{activeReport.personalizedNextStep.buttonLabelAr}</span>
-                      <ArrowLeft className="w-4 h-4" />
-                    </button>
+                  return (
+                    <div className="p-6 rounded-2xl bg-gradient-to-br from-[#23170D] to-[#040405] border border-[#F5BF1E]/50 text-right space-y-4 shadow-xl">
+                      <div>
+                        <span className="text-xs text-[#F5BF1E] font-medium tracking-wide">
+                          التوجيه الاستشاري الحاسم
+                        </span>
+                        <h3 className="font-heading font-bold text-lg sm:text-xl text-[#FCFCFA] mt-1 mb-1">
+                          {activeReport.personalizedNextStep.headlineAr}
+                        </h3>
+                        <p className="text-xs text-[#C8C5BA] leading-relaxed">
+                          {activeReport.personalizedNextStep.subtextAr}
+                        </p>
+                      </div>
 
-                    <button
-                      onClick={() => {
-                        setShowPrintView(true);
-                        trackEvent('report_downloaded', { report_id: activeReport.id });
-                      }}
-                      className="w-full sm:w-auto px-5 py-3 rounded-xl text-xs font-semibold bg-[#040405] border border-[#4A2F15] text-[#FCFCFA] hover:border-[#F5BF1E] transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                    >
-                      <Printer className="w-3.5 h-3.5 text-[#F5BF1E]" />
-                      <span>حفظ كملف استراتيجي PDF</span>
-                    </button>
-                  </div>
-                </div>
+                      <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
+                        <button
+                          onClick={handlePersonalizedCtaClick}
+                          className="w-full sm:w-auto px-7 py-3 rounded-xl font-heading font-bold text-xs sm:text-sm bg-[#F5BF1E] text-[#040405] hover:brightness-105 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-[#F5BF1E]/10"
+                        >
+                          <span>{displayButtonLabel}</span>
+                          <ArrowLeft className="w-4 h-4" />
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setShowPrintView(true);
+                            trackEvent('report_downloaded', { report_id: activeReport.id });
+                          }}
+                          className="w-full sm:w-auto px-5 py-3 rounded-xl text-xs font-semibold bg-[#040405] border border-[#4A2F15] text-[#FCFCFA] hover:border-[#F5BF1E] transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <Printer className="w-3.5 h-3.5 text-[#F5BF1E]" />
+                          <span>حفظ كملف استراتيجي PDF</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             ) : null}
           </div>

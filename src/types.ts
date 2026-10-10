@@ -367,7 +367,7 @@ export interface StrategicReport {
     headlineAr: string;
     buttonLabelAr: string;
     subtextAr: string;
-    targetModule: 'creator_validation' | 'creator_mvp' | 'seller_offer';
+    targetModule: 'creator_validation' | 'creator_mvp' | 'reassessment' | 'seller_offer';
   };
 }
 

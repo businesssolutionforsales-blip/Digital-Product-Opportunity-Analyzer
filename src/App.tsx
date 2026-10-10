@@ -5,9 +5,10 @@ import {
   StrategicReport,
   IdeaDiscoveryAnswers,
   DiscoveredCandidate,
+  AiStrategicInterpretation,
 } from './types';
 import { analyzeOpportunity } from './data/strategicEngine';
-import { queryStructuredAiInterpretation } from './services/aiService';
+import { queryStructuredAiInterpretation, computeAiInputFingerprint } from './services/aiService';
 import { trackEvent } from './services/analytics';
 import { BrandHeader } from './components/BrandHeader';
 import { HeroSection } from './components/HeroSection';
@@ -73,6 +74,11 @@ export default function App() {
 
   // Real Loading Stage (Requirement #5)
   const [analysisStage, setAnalysisStage] = useState<RealAnalysisStage>('deterministic_scoring');
+
+  // Cache and race-condition refs for AI interpretations
+  const aiInterpretationCacheRef = React.useRef<Map<string, AiStrategicInterpretation>>(new Map());
+  const recalculateSequenceRef = React.useRef<number>(0);
+  const latestTargetFingerprintRef = React.useRef<string>('');
 
   // Autosave resume prompt (Requirement #15)
   const [pendingResumeDraft, setPendingResumeDraft] = useState<AutosaveDraft | null>(null);
@@ -235,7 +241,16 @@ export default function App() {
 
       // Stage 4: Merging verified analysis
       setAnalysisStage('merging_report');
-      const finalReport = analyzeOpportunity(answers, aiInterpretation);
+      const inputFingerprint = computeAiInputFingerprint(answers);
+      const hasValidAi = aiInterpretation && isValidAiInterpretation(aiInterpretation);
+
+      if (hasValidAi) {
+        aiInterpretationCacheRef.current.set(inputFingerprint, aiInterpretation);
+      }
+
+      const finalReport = analyzeOpportunity(answers, hasValidAi ? aiInterpretation : null, {
+        aiFingerprint: hasValidAi ? inputFingerprint : undefined,
+      });
 
       // Stage 5: Finalize
       setAnalysisStage('finalizing');
@@ -271,11 +286,109 @@ export default function App() {
     trackEvent('report_unlocked', { report_id: reportId });
   };
 
-  // 6. Recalculate Scenario update
+  // 6. Recalculate Scenario update with Stale AI Invalidation and Race-Condition Protection
   const handleUpdateAnswers = (updatedAnswers: QuestionnaireAnswers) => {
+    if (!activeReport) return;
+
     setQuestionnaireDraft(updatedAnswers);
-    const updatedReport = analyzeOpportunity(updatedAnswers, activeReport?.aiInterpretation);
-    setActiveReport(updatedReport);
+    const newFingerprint = computeAiInputFingerprint(updatedAnswers);
+    const prevFingerprint = activeReport.aiFingerprint;
+
+    // 1. If AI-relevant inputs haven't changed and existing AI is valid, keep it
+    if (
+      prevFingerprint &&
+      prevFingerprint === newFingerprint &&
+      activeReport.aiInterpretation &&
+      isValidAiInterpretation(activeReport.aiInterpretation)
+    ) {
+      const retainedReport = analyzeOpportunity(updatedAnswers, activeReport.aiInterpretation, {
+        reportId: activeReport.id,
+        createdAt: activeReport.createdAt,
+        aiFingerprint: newFingerprint,
+      });
+      setActiveReport(retainedReport);
+      return;
+    }
+
+    // 2. If we have a cached AI interpretation that exactly matches this new input fingerprint, reuse it safely
+    const cachedMatchingAi = aiInterpretationCacheRef.current.get(newFingerprint);
+    if (cachedMatchingAi && isValidAiInterpretation(cachedMatchingAi)) {
+      const cachedReport = analyzeOpportunity(updatedAnswers, cachedMatchingAi, {
+        reportId: activeReport.id,
+        createdAt: activeReport.createdAt,
+        aiFingerprint: newFingerprint,
+      });
+      setActiveReport(cachedReport);
+      return;
+    }
+
+    // 3. Stale AI Invalidation:
+    // When inputs change, immediately invalidate previous AI interpretation and display
+    // authoritative deterministic report with zero delay.
+    const immediateDeterministicReport = analyzeOpportunity(updatedAnswers, null, {
+      reportId: activeReport.id,
+      createdAt: activeReport.createdAt,
+      isAiRecalculating: true,
+    });
+    setActiveReport(immediateDeterministicReport);
+
+    // 4. Race-condition protection: increment sequence ID and record target fingerprint
+    const sequenceId = ++recalculateSequenceRef.current;
+    latestTargetFingerprintRef.current = newFingerprint;
+
+    // 5. Request fresh AI interpretation asynchronously in background
+    (async () => {
+      try {
+        const freshAiInterpretation = await queryStructuredAiInterpretation(
+          immediateDeterministicReport,
+          updatedAnswers
+        );
+
+        // Discard stale or mismatched responses (race-condition protection)
+        if (recalculateSequenceRef.current !== sequenceId) {
+          return;
+        }
+        if (latestTargetFingerprintRef.current !== newFingerprint) {
+          return;
+        }
+
+        if (freshAiInterpretation && isValidAiInterpretation(freshAiInterpretation)) {
+          aiInterpretationCacheRef.current.set(newFingerprint, freshAiInterpretation);
+
+          setActiveReport((prev) => {
+            if (!prev || prev.id !== activeReport.id) return prev;
+            return analyzeOpportunity(updatedAnswers, freshAiInterpretation, {
+              reportId: activeReport.id,
+              createdAt: activeReport.createdAt,
+              aiFingerprint: newFingerprint,
+              isAiRecalculating: false,
+            });
+          });
+        } else {
+          setActiveReport((prev) => {
+            if (!prev || prev.id !== activeReport.id) return prev;
+            return {
+              ...prev,
+              isAiRecalculating: false,
+              analysisMode: 'rules_only',
+              aiInterpretation: undefined,
+              aiFingerprint: undefined,
+            };
+          });
+        }
+      } catch (err) {
+        setActiveReport((prev) => {
+          if (!prev || prev.id !== activeReport.id) return prev;
+          return {
+            ...prev,
+            isAiRecalculating: false,
+            analysisMode: 'rules_only',
+            aiInterpretation: undefined,
+            aiFingerprint: undefined,
+          };
+        });
+      }
+    })();
   };
 
   // Reset to landing
@@ -383,8 +496,17 @@ export default function App() {
                   <span className="text-xs text-[#A7690C] font-semibold">
                     تقرير التقييم الاستراتيجي · رقم {activeReport.id}
                   </span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full border border-[#4A2F15] bg-[#040405] text-[#C8C5BA]">
-                    {activeReport.analysisMode === 'hybrid_ai' ? 'تحليل هجين معزز بالذكاء الاستراتيجي' : 'تحليل قطعي مبني على القواعد'}
+                  <span className="text-[10px] px-2 py-0.5 rounded-full border border-[#4A2F15] bg-[#040405] text-[#C8C5BA] inline-flex items-center gap-1.5">
+                    {activeReport.isAiRecalculating ? (
+                      <>
+                        <Sparkles className="w-3 h-3 text-[#F5BF1E] animate-spin" />
+                        <span>جاري تحديث الرؤية الذكية...</span>
+                      </>
+                    ) : activeReport.analysisMode === 'hybrid_ai' ? (
+                      'تحليل هجين معزز بالذكاء الاستراتيجي'
+                    ) : (
+                      'تحليل قطعي مبني على القواعد'
+                    )}
                   </span>
                 </div>
                 <h2 className="font-heading font-bold text-base sm:text-lg text-[#FCFCFA]">

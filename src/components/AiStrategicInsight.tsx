@@ -1,28 +1,12 @@
 import React from 'react';
 import { AiStrategicInterpretation } from '../types';
+import { isValidAiInterpretation } from '../services/aiService';
 import { Sparkles, HelpCircle, AlertTriangle, FlaskConical, Ban, ShieldCheck } from 'lucide-react';
+
+export { isValidAiInterpretation };
 
 interface AiStrategicInsightProps {
   interpretation: AiStrategicInterpretation;
-}
-
-export function isValidAiInterpretation(interpretation?: AiStrategicInterpretation | null): interpretation is AiStrategicInterpretation {
-  if (!interpretation || typeof interpretation !== 'object') {
-    return false;
-  }
-  const requiredFields: (keyof AiStrategicInterpretation)[] = [
-    'strategic_interpretation',
-    'evidence_gap',
-    'recommended_test',
-    'recommended_test_reason',
-    'what_not_to_do',
-    'next_best_question',
-  ];
-
-  return requiredFields.every((field) => {
-    const val = interpretation[field];
-    return typeof val === 'string' && val.trim().length > 0;
-  });
 }
 
 export const AiStrategicInsight: React.FC<AiStrategicInsightProps> = ({ interpretation }) => {

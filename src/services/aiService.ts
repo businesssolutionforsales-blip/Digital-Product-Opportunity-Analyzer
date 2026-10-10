@@ -11,6 +11,66 @@ import {
  * Bridges server-side Gemini API with strict deterministic boundary.
  */
 
+/**
+ * Strict validator for AI Strategic Interpretation from Gemini.
+ * Ensures that all expected fields exist and are non-empty strings.
+ */
+export function isValidAiInterpretation(
+  interpretation?: AiStrategicInterpretation | null
+): interpretation is AiStrategicInterpretation {
+  if (!interpretation || typeof interpretation !== 'object') {
+    return false;
+  }
+  const requiredFields: (keyof AiStrategicInterpretation)[] = [
+    'strategic_interpretation',
+    'evidence_gap',
+    'recommended_test',
+    'recommended_test_reason',
+    'what_not_to_do',
+    'next_best_question',
+  ];
+
+  return requiredFields.every((field) => {
+    const val = interpretation[field];
+    return typeof val === 'string' && val.trim().length > 0;
+  });
+}
+
+/**
+ * Computes a deterministic canonical fingerprint for questionnaire answers.
+ * Used to ensure that AI interpretations are strictly tied to the exact input state
+ * and never displayed for mismatched or modified diagnostic data.
+ */
+export function computeAiInputFingerprint(answers: QuestionnaireAnswers): string {
+  const norm = {
+    domain: (answers.expertiseDomain || '').trim().toLowerCase(),
+    years: (answers.yearsOfExperience || '').trim(),
+    buyer: (answers.targetBuyerDescription || '').trim().toLowerCase(),
+    buyer_spec: answers.isBuyerBroadOrSpecific || '',
+    problem: (answers.coreProblemDescription || '').trim().toLowerCase(),
+    freq: answers.problemFrequency || '',
+    cost: Array.isArray(answers.costOfInaction)
+      ? [...answers.costOfInaction].sort().join(',')
+      : String(answers.costOfInaction || '').trim().toLowerCase(),
+    alternatives: (answers.currentAlternativesAndWorkarounds || '').trim().toLowerCase(),
+    demand_evidence: [...(answers.demandEvidenceList || [])].sort().join(','),
+    evidence_notes: (answers.evidenceNotes || '').trim().toLowerCase(),
+    before: (answers.beforeState || '').trim().toLowerCase(),
+    after: (answers.afterState || '').trim().toLowerCase(),
+    method: (answers.uniqueMethodOrProcess || '').trim().toLowerCase(),
+    method_type: answers.uniqueMethodType || '',
+    creator_time: answers.creatorTimePerCustomer || '',
+    requires_feedback: Boolean(answers.requiresPersonalFeedback),
+    price_tier: answers.expectedPriceTier || '',
+    paying_clients: Boolean(answers.hasExistingPayingClients),
+    access_level: answers.audienceAccessLevel || '',
+    feedback_state: answers.personalFeedbackState || '',
+    one_on_one: Boolean(answers.requiresOneOnOneAccountability),
+    delivery_mech: [...(answers.deliveryMechanism || [])].sort().join(','),
+  };
+  return JSON.stringify(norm);
+}
+
 export async function queryStructuredAiInterpretation(
   reportCore: Pick<
     StrategicReport,

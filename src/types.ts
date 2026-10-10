@@ -318,6 +318,8 @@ export interface StrategicReport {
   answers: QuestionnaireAnswers;
   analysisMode: 'hybrid_ai' | 'rules_only';
   aiInterpretation?: AiStrategicInterpretation;
+  aiFingerprint?: string;
+  isAiRecalculating?: boolean;
   validationMaturity?: ValidationMaturityInfo;
 
   opportunityScore: number; // 0 - 100

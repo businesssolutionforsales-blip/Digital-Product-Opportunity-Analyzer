@@ -9,6 +9,25 @@ import dotenv2 from "dotenv";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 
+// src/services/aiService.ts
+function isValidAiInterpretation(interpretation) {
+  if (!interpretation || typeof interpretation !== "object") {
+    return false;
+  }
+  const requiredFields = [
+    "strategic_interpretation",
+    "evidence_gap",
+    "recommended_test",
+    "recommended_test_reason",
+    "what_not_to_do",
+    "next_best_question"
+  ];
+  return requiredFields.every((field) => {
+    const val = interpretation[field];
+    return typeof val === "string" && val.trim().length > 0;
+  });
+}
+
 // src/data/strategicEngine.ts
 function inferValidationMaturityStage(answers) {
   const demandList = answers.demandEvidenceList || [];
@@ -124,7 +143,8 @@ function inferValidationMaturityStage(answers) {
     summaryAr: "\u0627\u0644\u0641\u0643\u0631\u0629 \u0645\u0628\u0646\u064A\u0629 \u0628\u0627\u0644\u0643\u0627\u0645\u0644 \u0639\u0644\u0649 \u062A\u0642\u062F\u064A\u0631\u0627\u062A \u0634\u062E\u0635\u064A\u0629 \u0648\u0645\u0644\u0627\u062D\u0638\u0627\u062A \u063A\u064A\u0631 \u0645\u0624\u0643\u062F\u0629\u061B \u0627\u0644\u0623\u0648\u0644\u0648\u064A\u0629 \u0644\u0625\u062C\u0631\u0627\u0621 \u0645\u062D\u0627\u062F\u062B\u0627\u062A \u0627\u0633\u062A\u0643\u0634\u0627\u0641\u064A\u0629 \u0648\u062C\u0645\u0639 \u0623\u062F\u0644\u0629."
   };
 }
-function analyzeOpportunity(answers, aiInterpretation) {
+function analyzeOpportunity(answers, aiInterpretation, options) {
+  const verifiedAi = aiInterpretation && isValidAiInterpretation(aiInterpretation) ? aiInterpretation : null;
   const problemStrength = calculateProblemStrength(answers);
   const buyerClarity = calculateBuyerClarity(answers);
   const transformationStrength = calculateTransformationStrength(answers);
@@ -145,13 +165,13 @@ function analyzeOpportunity(answers, aiInterpretation) {
     problemStrength.score,
     buyerClarity.score,
     demandEvidence.score,
-    aiInterpretation
+    verifiedAi
   );
-  const assumptionMap = buildAssumptionMap(answers, demandEvidence.score, aiInterpretation);
+  const assumptionMap = buildAssumptionMap(answers, demandEvidence.score, verifiedAi);
   const formatRecommendation = buildFormatRecommendation(answers);
   const productConcept = buildProductConcept(answers, formatRecommendation.primary);
   const positioning = buildPositioningStatement(answers);
-  const mvp = buildMvpRecommendation(answers, formatRecommendation.primary, validationMaturity, aiInterpretation);
+  const mvp = buildMvpRecommendation(answers, formatRecommendation.primary, validationMaturity, verifiedAi);
   const sprintResult = buildValidationSprint(answers, validationMaturity, formatRecommendation.primary);
   const discoveryQuestions = buildDiscoveryQuestions(answers);
   const stopGoRules = buildStopGoRules(answers, demandEvidence.score);
@@ -160,14 +180,14 @@ function analyzeOpportunity(answers, aiInterpretation) {
     formatRecommendation.primary,
     formatRecommendation.secondary,
     validationMaturity,
-    aiInterpretation
+    verifiedAi
   );
-  const missingData = buildMissingData(answers, demandEvidence.score, aiInterpretation);
+  const missingData = buildMissingData(answers, demandEvidence.score, verifiedAi);
   const nextThreeQuestions = buildNextThreeQuestions(
     answers,
     validationMaturity,
     formatRecommendation.primary,
-    aiInterpretation
+    verifiedAi
   );
   const personalizedNextStep = buildPersonalizedNextStep(
     opportunityScore,
@@ -182,11 +202,13 @@ function analyzeOpportunity(answers, aiInterpretation) {
   });
   formatRecommendation.avoid = safeAvoid;
   return {
-    id: `RPT-${Date.now().toString(36).toUpperCase()}`,
-    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    id: options?.reportId || `RPT-${Date.now().toString(36).toUpperCase()}`,
+    createdAt: options?.createdAt || (/* @__PURE__ */ new Date()).toISOString(),
     answers,
-    analysisMode: aiInterpretation ? "hybrid_ai" : "rules_only",
-    aiInterpretation: aiInterpretation || void 0,
+    analysisMode: verifiedAi ? "hybrid_ai" : "rules_only",
+    aiInterpretation: verifiedAi || void 0,
+    aiFingerprint: options?.aiFingerprint,
+    isAiRecalculating: options?.isAiRecalculating,
     validationMaturity,
     opportunityScore,
     opportunityBand,

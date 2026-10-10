@@ -20,6 +20,7 @@ import {
   ValidationMaturityStage,
   SprintMode,
 } from '../types';
+import { isValidAiInterpretation } from '../services/aiService';
 
 /**
  * Mohamed Adel — Digital Product Opportunity Scoring & Diagnostic Engine
@@ -180,8 +181,17 @@ export function inferValidationMaturityStage(answers: QuestionnaireAnswers): Val
 
 export function analyzeOpportunity(
   answers: QuestionnaireAnswers,
-  aiInterpretation?: AiStrategicInterpretation | null
+  aiInterpretation?: AiStrategicInterpretation | null,
+  options?: {
+    reportId?: string;
+    createdAt?: string;
+    aiFingerprint?: string;
+    isAiRecalculating?: boolean;
+  }
 ): StrategicReport {
+  // Validate AI interpretation integrity
+  const verifiedAi = (aiInterpretation && isValidAiInterpretation(aiInterpretation)) ? aiInterpretation : null;
+
   // 1. Calculate Deterministic Dimension Scores (0 - 100)
   const problemStrength = calculateProblemStrength(answers);
   const buyerClarity = calculateBuyerClarity(answers);
@@ -221,14 +231,14 @@ export function analyzeOpportunity(
     problemStrength.score,
     buyerClarity.score,
     demandEvidence.score,
-    aiInterpretation
+    verifiedAi
   );
 
-  const assumptionMap = buildAssumptionMap(answers, demandEvidence.score, aiInterpretation);
+  const assumptionMap = buildAssumptionMap(answers, demandEvidence.score, verifiedAi);
   const formatRecommendation = buildFormatRecommendation(answers);
   const productConcept = buildProductConcept(answers, formatRecommendation.primary);
   const positioning = buildPositioningStatement(answers);
-  const mvp = buildMvpRecommendation(answers, formatRecommendation.primary, validationMaturity, aiInterpretation);
+  const mvp = buildMvpRecommendation(answers, formatRecommendation.primary, validationMaturity, verifiedAi);
 
   // Requirement #7: Pass formatRecommendation into buildValidationSprint
   const sprintResult = buildValidationSprint(answers, validationMaturity, formatRecommendation.primary);
@@ -240,16 +250,16 @@ export function analyzeOpportunity(
     formatRecommendation.primary,
     formatRecommendation.secondary,
     validationMaturity,
-    aiInterpretation
+    verifiedAi
   );
-  const missingData = buildMissingData(answers, demandEvidence.score, aiInterpretation);
+  const missingData = buildMissingData(answers, demandEvidence.score, verifiedAi);
 
   // Requirement #9: Uncertainty-based next three questions
   const nextThreeQuestions = buildNextThreeQuestions(
     answers,
     validationMaturity,
     formatRecommendation.primary,
-    aiInterpretation
+    verifiedAi
   );
 
   const personalizedNextStep = buildPersonalizedNextStep(
@@ -269,11 +279,13 @@ export function analyzeOpportunity(
   formatRecommendation.avoid = safeAvoid;
 
   return {
-    id: `RPT-${Date.now().toString(36).toUpperCase()}`,
-    createdAt: new Date().toISOString(),
+    id: options?.reportId || `RPT-${Date.now().toString(36).toUpperCase()}`,
+    createdAt: options?.createdAt || new Date().toISOString(),
     answers,
-    analysisMode: aiInterpretation ? 'hybrid_ai' : 'rules_only',
-    aiInterpretation: aiInterpretation || undefined,
+    analysisMode: verifiedAi ? 'hybrid_ai' : 'rules_only',
+    aiInterpretation: verifiedAi || undefined,
+    aiFingerprint: options?.aiFingerprint,
+    isAiRecalculating: options?.isAiRecalculating,
     validationMaturity,
     opportunityScore,
     opportunityBand,

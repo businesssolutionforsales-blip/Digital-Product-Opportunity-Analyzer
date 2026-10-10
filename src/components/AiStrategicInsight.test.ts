@@ -1,7 +1,8 @@
 // @ts-nocheck
 import { describe, it, expect } from 'vitest';
 import { isValidAiInterpretation } from './AiStrategicInsight';
-import { AiStrategicInterpretation } from '../types';
+import { computeAiInputFingerprint, FINGERPRINT_SCHEMA_VERSION } from '../services/aiService';
+import { AiStrategicInterpretation, QuestionnaireAnswers } from '../types';
 
 describe('isValidAiInterpretation Guard Tests', () => {
   const completeValidInterpretation: AiStrategicInterpretation = {
@@ -48,5 +49,68 @@ describe('isValidAiInterpretation Guard Tests', () => {
     expect(isValidAiInterpretation('some string' as any)).toBe(false);
     expect(isValidAiInterpretation(12345 as any)).toBe(false);
     expect(isValidAiInterpretation([] as any)).toBe(false);
+  });
+});
+
+describe('computeAiInputFingerprint schema v3 tests', () => {
+  const baseAnswers: QuestionnaireAnswers = {
+    userPath: 'specific_idea',
+    productNameOrWorkingTitle: 'دليل العمل الحر',
+    expertiseDomain: 'تطوير البرمجيات',
+    yearsOfExperience: '5-10',
+    qualificationEvidence: ['client_results'],
+    uniqueMethodOrProcess: 'منهجية ثلاثية الخطوات',
+    audienceAccessLevel: 'direct_daily',
+    targetBuyerDescription: 'مبرمجون مبتدئون',
+    buyerStageAndSituation: 'يعانون من صعوبة الحصول على أول عميل',
+    buyerCurrentBehavior: 'تقديم عروض عشوائية',
+    isBuyerBroadOrSpecific: 'narrow_specific',
+    coreProblemDescription: 'غياب نموذج تسعير واضح',
+    problemFrequency: 'daily',
+    costOfInaction: ['money', 'time'],
+    currentAlternativesAndWorkarounds: 'مشاهدة فيديوهات يوتيوب متناثرة والاعتماد على نصائح الأصدقاء',
+    demandEvidenceList: ['people_ask_me'],
+    evidenceNotes: 'أكثر من 10 رسائل أسبوعياً',
+    beforeState: 'تشتت وانعدام مبيعات',
+    afterState: 'تدفق عملاء مستمر بسعر مربح',
+    transformationRealism: 'highly_controllable',
+    deliveryMechanism: ['framework_steps'],
+    creatorMethodSummary: 'خطوات تطبيقية أسبوعية',
+    creatorTimePerCustomer: 'almost_none',
+    requiresPersonalFeedback: false,
+    requiresOneOnOneAccountability: false,
+    expectedPriceTier: 'mid_150_500',
+    productRoleInBusiness: 'core_flagship',
+    existingAudienceChannel: 'لينكد إن',
+    hasExistingPayingClients: true,
+  };
+
+  it('uses schema version v3', () => {
+    expect(FINGERPRINT_SCHEMA_VERSION).toBe('v3');
+    const fp = computeAiInputFingerprint(baseAnswers);
+    const parsed = JSON.parse(fp);
+    expect(parsed._schema).toBe('v3');
+  });
+
+  it('changes fingerprint when yearsOfExperience changes', () => {
+    const fp1 = computeAiInputFingerprint(baseAnswers);
+    const fp2 = computeAiInputFingerprint({
+      ...baseAnswers,
+      yearsOfExperience: '1-3',
+    });
+    expect(fp1).not.toBe(fp2);
+    expect(JSON.parse(fp1).yearsOfExperience).toBe('5-10');
+    expect(JSON.parse(fp2).yearsOfExperience).toBe('1-3');
+  });
+
+  it('changes fingerprint when currentAlternativesAndWorkarounds changes', () => {
+    const fp1 = computeAiInputFingerprint(baseAnswers);
+    const fp2 = computeAiInputFingerprint({
+      ...baseAnswers,
+      currentAlternativesAndWorkarounds: 'استخدام أدوات جاهزة مجانية',
+    });
+    expect(fp1).not.toBe(fp2);
+    expect(JSON.parse(fp1).currentAlternativesAndWorkarounds).toContain('يوتيوب');
+    expect(JSON.parse(fp2).currentAlternativesAndWorkarounds).toContain('أدوات');
   });
 });

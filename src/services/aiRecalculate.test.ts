@@ -7,6 +7,7 @@ import {
 } from './aiService';
 import { analyzeOpportunity } from '../data/strategicEngine';
 import { QuestionnaireAnswers, AiStrategicInterpretation, StrategicReport } from '../types';
+import { createAnalysisCoordinator } from './coordinator';
 
 describe('AI Integrity and Interactive Recalculation', () => {
   const baseAnswers: QuestionnaireAnswers = {
@@ -87,11 +88,11 @@ describe('AI Integrity and Interactive Recalculation', () => {
   };
 
   describe('1. Canonical Deterministic Input Fingerprinting', () => {
-    it('includes schema version v2 in the fingerprint', () => {
+    it('includes schema version v3 in the fingerprint', () => {
       const fp = computeAiInputFingerprint(baseAnswers);
       const parsed = JSON.parse(fp);
       expect(parsed._schema).toBe(FINGERPRINT_SCHEMA_VERSION);
-      expect(parsed._schema).toBe('v2');
+      expect(parsed._schema).toBe('v3');
     });
 
     it('produces identical fingerprints for identical inputs', () => {
@@ -549,6 +550,140 @@ describe('AI Integrity and Interactive Recalculation', () => {
       expect(canRenderAiInPrint).toBe(false);
       expect(recalculatedReport.analysisMode).toBe('rules_only');
       expect(recalculatedReport.aiInterpretation).toBeUndefined();
+    });
+  });
+
+  describe('4. Live Request Coordination Integration Suite', () => {
+    it('Integration: Original submission is discarded if user resets before AI arrives', async () => {
+      const coordinator = createAnalysisCoordinator();
+
+      let resolveAi: (val: any) => void;
+      const pendingAiPromise = new Promise((resolve) => {
+        resolveAi = resolve;
+      });
+
+      // Submit original analysis
+      const submissionPromise = coordinator.handleQuestionnaireSubmit(
+        baseAnswers,
+        () => pendingAiPromise as any
+      );
+
+      expect(coordinator.getState().step).toBe('analyzing');
+
+      // User resets while AI is pending
+      coordinator.handleReset();
+      expect(coordinator.getState().step).toBe('landing');
+      expect(coordinator.getState().activeReport).toBeNull();
+
+      // AI arrives after reset
+      resolveAi!(sampleAiInterpretation);
+      await submissionPromise;
+
+      // Must remain reset on landing
+      expect(coordinator.getState().step).toBe('landing');
+      expect(coordinator.getState().activeReport).toBeNull();
+    });
+
+    it('Integration: Original submission is superseded if user starts a new analysis', async () => {
+      const coordinator = createAnalysisCoordinator();
+
+      let resolveAi1: (val: any) => void;
+      const pendingAiPromise1 = new Promise((resolve) => {
+        resolveAi1 = resolve;
+      });
+
+      const submissionPromise1 = coordinator.handleQuestionnaireSubmit(
+        baseAnswers,
+        () => pendingAiPromise1 as any
+      );
+
+      // User navigates back and submits different analysis
+      const answers2 = { ...baseAnswers, creatorTimePerCustomer: 'high_touch' };
+      const submissionPromise2 = coordinator.handleQuestionnaireSubmit(
+        answers2,
+        async () => sampleAiInterpretationB
+      );
+
+      await submissionPromise2;
+      expect(coordinator.getState().activeReport?.answers.creatorTimePerCustomer).toBe('high_touch');
+      expect(coordinator.getState().activeReport?.aiInterpretation?.strategic_interpretation).toBe(
+        sampleAiInterpretationB.strategic_interpretation
+      );
+
+      // Delayed AI1 arrives
+      resolveAi1!(sampleAiInterpretation);
+      await submissionPromise1;
+
+      // Must remain report 2
+      expect(coordinator.getState().activeReport?.answers.creatorTimePerCustomer).toBe('high_touch');
+      expect(coordinator.getState().activeReport?.aiInterpretation?.strategic_interpretation).toBe(
+        sampleAiInterpretationB.strategic_interpretation
+      );
+    });
+
+    it('Integration: Rapid recalculation drops slow earlier requests and prevents state corruption', async () => {
+      const coordinator = createAnalysisCoordinator();
+      // First, complete an original submission
+      await coordinator.handleQuestionnaireSubmit(baseAnswers, async () => sampleAiInterpretation);
+      expect(coordinator.getState().activeReport?.analysisMode).toBe('hybrid_ai');
+
+      const answersB = { ...baseAnswers, creatorTimePerCustomer: '1_to_2h' };
+      const answersC = { ...baseAnswers, creatorTimePerCustomer: 'high_touch' };
+
+      let resolveB: (val: any) => void;
+      const promiseB = new Promise((resolve) => {
+        resolveB = resolve;
+      });
+
+      let resolveC: (val: any) => void;
+      const promiseC = new Promise((resolve) => {
+        resolveC = resolve;
+      });
+
+      // Rapidly update to B then C
+      const recalculateB = coordinator.handleUpdateAnswers(answersB, () => promiseB as any);
+      const recalculateC = coordinator.handleUpdateAnswers(answersC, () => promiseC as any);
+
+      // C resolves first
+      resolveC!(sampleAiInterpretationC);
+      await recalculateC;
+
+      expect(coordinator.getState().activeReport?.answers.creatorTimePerCustomer).toBe('high_touch');
+      expect(coordinator.getState().activeReport?.aiInterpretation?.strategic_interpretation).toBe(
+        sampleAiInterpretationC.strategic_interpretation
+      );
+
+      // B resolves second
+      resolveB!(sampleAiInterpretationB);
+      await recalculateB;
+
+      // Must remain C
+      expect(coordinator.getState().activeReport?.answers.creatorTimePerCustomer).toBe('high_touch');
+      expect(coordinator.getState().activeReport?.aiInterpretation?.strategic_interpretation).toBe(
+        sampleAiInterpretationC.strategic_interpretation
+      );
+    });
+
+    it('Integration: AI failure keeps authoritative deterministic report in rules_only mode', async () => {
+      const coordinator = createAnalysisCoordinator();
+      await coordinator.handleQuestionnaireSubmit(baseAnswers, async () => sampleAiInterpretation);
+
+      const answersB = { ...baseAnswers, targetBuyerDescription: 'أطباء الأسنان في الرياض' };
+
+      const recalculateB = coordinator.handleUpdateAnswers(answersB, async () => {
+        throw new Error('AI Service 503 Unavailable');
+      });
+
+      await recalculateB;
+
+      const report = coordinator.getState().activeReport;
+      expect(report).toBeDefined();
+      expect(report?.answers.targetBuyerDescription).toBe('أطباء الأسنان في الرياض');
+      expect(report?.analysisMode).toBe('rules_only');
+      expect(report?.aiInterpretation).toBeUndefined();
+      expect(report?.isAiRecalculating).toBe(false);
+      // Authoritative score is calculated deterministically
+      expect(typeof report?.opportunityScore).toBe('number');
     });
   });
 });

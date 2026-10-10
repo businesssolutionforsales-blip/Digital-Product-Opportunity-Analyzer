@@ -75,14 +75,16 @@ export default function App() {
   // Real Loading Stage (Requirement #5)
   const [analysisStage, setAnalysisStage] = useState<RealAnalysisStage>('deterministic_scoring');
 
-  // Cache and race-condition refs for AI interpretations
+  // Cache and race-condition refs for AI interpretations and analysis sessions
   const aiInterpretationCacheRef = React.useRef<Map<string, AiStrategicInterpretation>>(new Map());
   const recalculateSequenceRef = React.useRef<number>(0);
   const latestTargetFingerprintRef = React.useRef<string>('');
   const latestTargetReportIdRef = React.useRef<string>('');
+  const activeAnalysisSessionIdRef = React.useRef<number>(0);
 
   const invalidatePendingAiRequests = () => {
     recalculateSequenceRef.current++;
+    activeAnalysisSessionIdRef.current++;
     latestTargetFingerprintRef.current = '';
     latestTargetReportIdRef.current = '';
   };
@@ -120,6 +122,7 @@ export default function App() {
   // Resume unfinished analysis
   const handleResumeAnalysis = () => {
     if (!pendingResumeDraft) return;
+    invalidatePendingAiRequests();
     setSelectedPath(pendingResumeDraft.selectedPath);
     setQuestionnaireDraft(pendingResumeDraft.answers);
     setCurrentSectionIndex(pendingResumeDraft.currentSection || 0);
@@ -227,6 +230,9 @@ export default function App() {
   // 4. Submit Questionnaire -> Real Multi-Stage Analysis (Requirement #3, #4, #5)
   const handleQuestionnaireSubmit = async (answers: QuestionnaireAnswers) => {
     invalidatePendingAiRequests();
+    const sessionId = activeAnalysisSessionIdRef.current;
+    const initialFingerprint = computeAiInputFingerprint(answers);
+
     setQuestionnaireDraft(answers);
     setStep('analyzing');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -237,9 +243,13 @@ export default function App() {
       setAnalysisStage('deterministic_scoring');
       await new Promise((r) => setTimeout(r, 150));
 
+      if (activeAnalysisSessionIdRef.current !== sessionId) return;
+
       // Stage 2: Gaps and contradiction mapping
       setAnalysisStage('detecting_gaps');
       const deterministicCore = analyzeOpportunity(answers, null);
+
+      if (activeAnalysisSessionIdRef.current !== sessionId) return;
 
       // Stage 3: Real AI Strategic Interpretation Request
       setAnalysisStage('requesting_ai');
@@ -248,9 +258,14 @@ export default function App() {
         answers
       );
 
+      // Async boundary check: if user reset, started another analysis, or superseded this request
+      if (activeAnalysisSessionIdRef.current !== sessionId) return;
+
       // Stage 4: Merging verified analysis
       setAnalysisStage('merging_report');
       const inputFingerprint = computeAiInputFingerprint(answers);
+      if (inputFingerprint !== initialFingerprint) return;
+
       const hasValidAi = aiInterpretation && isValidAiInterpretation(aiInterpretation);
 
       if (hasValidAi) {
@@ -265,6 +280,9 @@ export default function App() {
       setAnalysisStage('finalizing');
       await new Promise((r) => setTimeout(r, 100));
 
+      // Final boundary check before state mutation
+      if (activeAnalysisSessionIdRef.current !== sessionId) return;
+
       setActiveReport(finalReport);
       setStep('report');
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -277,6 +295,7 @@ export default function App() {
       trackEvent('analysis_mode', { mode: finalReport.analysisMode });
       trackEvent('report_viewed', { report_id: finalReport.id });
     } catch (err) {
+      if (activeAnalysisSessionIdRef.current !== sessionId) return;
       // Fail-safe: Always deliver deterministic report if anything fails
       const fallbackReport = analyzeOpportunity(answers, null);
       setActiveReport(fallbackReport);
@@ -508,7 +527,10 @@ export default function App() {
             initialAnswers={questionnaireDraft}
             savedSection={currentSectionIndex}
             onSubmit={handleQuestionnaireSubmit}
-            onBackToPath={() => setStep('path_select')}
+            onBackToPath={() => {
+              invalidatePendingAiRequests();
+              setStep('path_select');
+            }}
           />
         )}
 

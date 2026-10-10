@@ -36,7 +36,7 @@ export function isValidAiInterpretation(
   });
 }
 
-export const FINGERPRINT_SCHEMA_VERSION = 'v2';
+export const FINGERPRINT_SCHEMA_VERSION = 'v3';
 
 function normStr(v: any): string {
   if (v == null) return '';
@@ -76,6 +76,7 @@ export function computeAiInputFingerprint(answers: QuestionnaireAnswers): string
     costOfInaction: normArr(answers.costOfInaction),
     creatorMethodSummary: normStr(answers.creatorMethodSummary),
     creatorTimePerCustomer: normStr(answers.creatorTimePerCustomer),
+    currentAlternativesAndWorkarounds: normStr(answers.currentAlternativesAndWorkarounds),
     deliveryMechanism: normArr(answers.deliveryMechanism),
     demandEvidenceList: normArr(answers.demandEvidenceList),
     evidenceNotes: normStr(answers.evidenceNotes),
@@ -123,6 +124,7 @@ export function computeAiInputFingerprint(answers: QuestionnaireAnswers): string
     uniqueMethodOrProcess: normStr(answers.uniqueMethodOrProcess),
     uniqueMethodType: normStr(answers.uniqueMethodType),
     userPath: normStr(answers.userPath),
+    yearsOfExperience: normStr(answers.yearsOfExperience),
   };
 
   return JSON.stringify(canon);
